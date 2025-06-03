@@ -1,0 +1,27 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  # You can enable stricter checks later if you wish:
+  # strong-mode:
+  #   implicit-casts: false
+  #   implicit-dynamic: false
+  errors:
+    # You can customize severity of specific lint rules here if needed
+    # e.g., make some warnings into errors
+    # missing_required_param: error
+    prefer_const_constructors: warning # Good to enable
+
+linter:
+  rules:
+    # Common good practices, uncomment and add more as we go or as you learn
+    prefer_const_constructors: true
+    prefer_final_fields: true
+    use_key_in_widget_constructors: true
+    # avoid_print: true # Uncomment this when closer to release, to avoid debug prints
+    # package_prefixed_library_names: true
+    # slash_for_doc_comments: true
+    # type_annotate_public_apis: true
+    # unawaited_futures: true
+    # directives_ordering: true # Helps keep imports organized
+    # prefer_single_quotes: true # Or false if you prefer double
+    # avoid_relative_lib_imports: true # Good for larger projects
