@@ -1,6 +1,8 @@
 // lib/features/deck_list/screens/deck_list_screen.dart
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart'; // For generating unique IDs
+import 'package:file_picker/file_picker.dart'; // For file picking
+import 'dart:typed_data'; // For Uint8List (file bytes)
 
 // Core Models
 import '../../../core/models/deck_model.dart';
@@ -10,6 +12,9 @@ import '../../../core/models/card_model.dart';
 import '../../study_mode/screens/manual_study_screen.dart';
 import '../../deck_management/screens/deck_edit_screen.dart';
 import '../../study_mode/screens/autoplay_screen.dart';
+
+// Service for Importing
+import '../../deck_management/services/deck_importer_service.dart';
 
 class DeckListScreen extends StatefulWidget {
   const DeckListScreen({super.key});
@@ -21,68 +26,37 @@ class DeckListScreen extends StatefulWidget {
 class _DeckListScreenState extends State<DeckListScreen> {
   List<DeckModel> _decks = [];
   final _uuid = const Uuid();
+  final DeckImporterService _importerService = DeckImporterService(); // Importer service instance
 
   @override
   void initState() {
     super.initState();
-    _loadDummyDecks();
+    _loadDummyDecks(); // Keep dummy decks for now, imported decks will be added
   }
 
+  // --- DUMMY DATA & MANAGEMENT (can be removed later if only importing) ---
   void _loadDummyDecks() {
     final card1_1 = CardModel(id: _uuid.v4(), frontText: "What is Flutter?", backText: "An open-source UI toolkit by Google.");
     final card1_2 = CardModel(id: _uuid.v4(), frontText: "What is a Widget in Flutter?", backText: "Everything in Flutter is a widget.");
-    final card1_3 = CardModel(id: _uuid.v4(), frontText: "What language is Flutter written in?", backText: "Dart.");
 
     final card2_1 = CardModel(id: _uuid.v4(), frontText: "Capital of Japan?", backText: "Tokyo");
-    final card2_2 = CardModel(id: _uuid.v4(), frontText: "Capital of France?", backText: "Paris");
-
-    final card3_1 = CardModel(id: _uuid.v4(), frontText: "Define 'Ephemeral'", backText: "Lasting for a very short time.");
 
     final deck1 = DeckModel(
       id: _uuid.v4(),
-      title: "Flutter Basics",
-      cards: [card1_1, card1_2, card1_3],
+      title: "Flutter Basics (Dummy)",
+      cards: [card1_1, card1_2],
       createdAt: DateTime.now().subtract(const Duration(days: 2)),
     );
 
     final deck2 = DeckModel(
       id: _uuid.v4(),
-      title: "World Capitals",
-      cards: [card2_1, card2_2],
+      title: "World Capitals (Dummy)",
+      cards: [card2_1],
       createdAt: DateTime.now().subtract(const Duration(days: 1)),
-      customFrontTimeSeconds: 3,
-      customBackTimeSeconds: 5,
-    );
-
-    final deck3 = DeckModel(
-      id: _uuid.v4(),
-      title: "Vocabulary Builder",
-      cards: [card3_1],
-      createdAt: DateTime.now(),
-    );
-
-    final deck4 = DeckModel(
-      id: _uuid.v4(),
-      title: "Upcoming Math Exam",
-      cards: [],
-      createdAt: DateTime.now().subtract(const Duration(hours: 5)),
     );
 
     setState(() {
-      _decks = [deck1, deck2, deck3, deck4];
-    });
-  }
-
-  void _addDummyDeck() {
-    final newDummyCard = CardModel(id: _uuid.v4(), frontText: "New Q", backText: "New A");
-    final newDummyDeck = DeckModel(
-      id: _uuid.v4(),
-      title: "Newly Added Deck ${_decks.length + 1}",
-      cards: [newDummyCard],
-      createdAt: DateTime.now(),
-    );
-    setState(() {
-      _decks.add(newDummyDeck);
+      _decks = [deck1, deck2];
     });
   }
 
@@ -95,7 +69,7 @@ class _DeckListScreenState extends State<DeckListScreen> {
   void _showDeleteConfirmationDialog(DeckModel deck) {
     showDialog(
       context: context,
-      builder: (BuildContext dialogContext) { // Use a different context name to avoid confusion
+      builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text('Delete Deck'),
           content: Text('Are you sure you want to delete the deck "${deck.title}"? This action cannot be undone.'),
@@ -103,7 +77,7 @@ class _DeckListScreenState extends State<DeckListScreen> {
             TextButton(
               child: const Text('Cancel'),
               onPressed: () {
-                Navigator.of(dialogContext).pop(); // Use dialogContext
+                Navigator.of(dialogContext).pop();
               },
             ),
             TextButton(
@@ -111,8 +85,8 @@ class _DeckListScreenState extends State<DeckListScreen> {
               child: const Text('Delete'),
               onPressed: () {
                 _deleteDeck(deck.id);
-                Navigator.of(dialogContext).pop(); // Use dialogContext
-                ScaffoldMessenger.of(context).showSnackBar( // Use the main screen's context
+                Navigator.of(dialogContext).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text('Deck "${deck.title}" deleted.')),
                 );
               },
@@ -122,6 +96,74 @@ class _DeckListScreenState extends State<DeckListScreen> {
       },
     );
   }
+  // --- END DUMMY DATA & MANAGEMENT ---
+
+
+  // --- DECK IMPORT LOGIC ---
+  Future<void> _pickAndImportDeck() async {
+    try {
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['txt', 'fdeck'], // Allow .txt and our custom .fdeck
+      );
+
+      if (result != null && result.files.single.bytes != null) {
+        Uint8List fileBytes = result.files.single.bytes!;
+        // In a real app, show a loading indicator here
+        // setState(() { _isLoadingImport = true; });
+
+        ParseResult parseResult = await _importerService.importDeckFromFile(fileBytes);
+
+        // if (_isLoadingImport && mounted) setState(() { _isLoadingImport = false; });
+
+        if (mounted) { // Check if the widget is still in the tree
+          if (parseResult.hasError) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Import Error: ${parseResult.error}'),
+                backgroundColor: Colors.redAccent,
+              ),
+            );
+          } else if (parseResult.deck != null) {
+            // Check if a deck with the same title already exists (optional)
+            bool deckExists = _decks.any((deck) => deck.title.toLowerCase() == parseResult.deck!.title.toLowerCase());
+            if (deckExists) {
+                 ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('A deck with the title "${parseResult.deck!.title}" already exists.')),
+                 );
+            } else {
+                setState(() {
+                  _decks.add(parseResult.deck!);
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Deck "${parseResult.deck!.title}" imported successfully!'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+            }
+          }
+        }
+      } else {
+        // User canceled the picker or file was empty
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No file selected or file is empty.')),
+          );
+        }
+      }
+    } catch (e) {
+      // Handle any other exceptions during file picking
+      // if (_isLoadingImport && mounted) setState(() { _isLoadingImport = false; });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('File picking failed: ${e.toString()}')),
+        );
+      }
+      print("File picking error: $e");
+    }
+  }
+  // --- END DECK IMPORT LOGIC ---
 
   @override
   Widget build(BuildContext context) {
@@ -138,10 +180,11 @@ class _DeckListScreenState extends State<DeckListScreen> {
         // ],
       ),
       body: _buildDeckList(),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _addDummyDeck, // Navigate to add new deck screen later
-        tooltip: 'Add Deck',
-        child: const Icon(Icons.add),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _pickAndImportDeck, // Calls the import function
+        label: const Text('Import Deck'),
+        icon: const Icon(Icons.file_upload),
+        tooltip: 'Import a deck from a text file',
       ),
     );
   }
@@ -152,7 +195,7 @@ class _DeckListScreenState extends State<DeckListScreen> {
         child: Padding(
           padding: EdgeInsets.all(16.0),
           child: Text(
-            'No decks yet. Tap the "+" button to create your first deck!',
+            'No decks yet. Tap "Import Deck" to add a deck from a file!',
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 18.0, color: Colors.grey),
           ),
@@ -184,7 +227,6 @@ class _DeckListScreenState extends State<DeckListScreen> {
                   color: Colors.green,
                   tooltip: 'Autoplay',
                   onPressed: () {
-                    print('Attempting to navigate to Autoplay for: ${deck.title}'); // Debug print
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -198,7 +240,6 @@ class _DeckListScreenState extends State<DeckListScreen> {
                   color: Colors.blue,
                   tooltip: 'Edit Deck',
                   onPressed: () {
-                    print('Attempting to navigate to Edit for: ${deck.title}'); // Debug print
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -218,7 +259,6 @@ class _DeckListScreenState extends State<DeckListScreen> {
               ],
             ),
             onTap: () {
-              print('Attempting to navigate to Manual Study for: ${deck.title}'); // Debug print
               Navigator.push(
                 context,
                 MaterialPageRoute(
