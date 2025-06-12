@@ -1,19 +1,27 @@
 // lib/features/study_mode/screens/autoplay_screen.dart
-import 'dart:async'; // Required for Timer
-import 'package:flutter/material.dart';
-import '../../../core/models/deck_model.dart';
-import '../../../core/models/card_model.dart';
 
-// Default timings if not set per deck or globally (we'll add global settings later)
-const int DEFAULT_FRONT_SECONDS = 5;
-const int DEFAULT_BACK_SECONDS = 7;
+import 'dart:async';
+import 'dart:math';
+import 'package:flutter/material.dart';
+import 'package:iconsax_flutter/iconsax_flutter.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
+import '../../../core/models/card_model.dart';
+import '../../../core/models/deck_model.dart';
+import '../../../core/services/deck_persistence_service.dart';
+import '../../../core/services/settings_service.dart';
+import '../../../core/widgets/flip_card_widget.dart';
 
 enum AutoplayStatus { playing, paused, stopped, finished }
 
 class AutoplayScreen extends StatefulWidget {
   final DeckModel deck;
+  final int startIndex;
 
-  const AutoplayScreen({super.key, required this.deck});
+  const AutoplayScreen({
+    super.key,
+    required this.deck,
+    this.startIndex = 0,
+  });
 
   @override
   State<AutoplayScreen> createState() => _AutoplayScreenState();
@@ -23,91 +31,127 @@ class _AutoplayScreenState extends State<AutoplayScreen> {
   int _currentIndex = 0;
   bool _showFront = true;
   AutoplayStatus _status = AutoplayStatus.stopped;
-  Timer? _cardTimer; // Timer for showing front/back of a card
-  Timer? _transitionDelayTimer; // Timer for a small delay before next card
+  Timer? _cardTimer;
+  Timer? _transitionDelayTimer;
 
-  // For displaying progress on the timer bar
   int _currentTimerDuration = 0;
   int _timeRemaining = 0;
+
+  final SettingsService _settingsService = SettingsService();
+  final DeckPersistenceService _persistenceService = DeckPersistenceService();
+  final FlipCardController _flipCardController = FlipCardController();
+  final Random _random = Random();
+
+  late int _globalFrontTime;
+  late int _globalBackTime;
+  late bool _shouldShuffle;
+  late bool _shouldLoop;
+  bool _isLoadingSettings = true;
+
+  List<CardModel> _currentPlayList = [];
 
   @override
   void initState() {
     super.initState();
-    if (widget.deck.cards.isNotEmpty) {
-      _status = AutoplayStatus.playing; // Start playing immediately
-      _startCardCycle();
-    } else {
-      _status = AutoplayStatus.finished; // No cards to play
+    WakelockPlus.enable();
+    print("Wakelock enabled for AutoplayScreen.");
+    _loadSettingsAndPrepareDeck();
+  }
+
+  Future<void> _loadSettingsAndPrepareDeck() async {
+    if (!mounted) return;
+    setState(() {
+      _isLoadingSettings = true;
+    });
+
+    _globalFrontTime = await _settingsService.getDefaultFrontTime();
+    _globalBackTime = await _settingsService.getDefaultBackTime();
+    _shouldShuffle = await _settingsService.getAutoplayShuffle();
+    _shouldLoop = await _settingsService.getAutoplayLoop();
+
+    if (widget.startIndex > 0) {
+      _shouldShuffle = false;
     }
+
+    _preparePlayList();
+    _currentIndex = (widget.startIndex < _currentPlayList.length) ? widget.startIndex : 0;
+
+    if (mounted) {
+      setState(() {
+        _isLoadingSettings = false;
+      });
+      if (_currentPlayList.isNotEmpty) {
+        _status = AutoplayStatus.playing;
+        _startCardCycle();
+      } else {
+        _status = AutoplayStatus.finished;
+      }
+    }
+  }
+
+  void _preparePlayList() {
+    _currentPlayList = List<CardModel>.from(widget.deck.cards);
+    if (_shouldShuffle && _currentPlayList.isNotEmpty) {
+      _currentPlayList.shuffle(_random);
+    }
+    _currentIndex = 0;
   }
 
   @override
   void dispose() {
+    WakelockPlus.disable();
+    print("Wakelock disabled for AutoplayScreen.");
     _cardTimer?.cancel();
     _transitionDelayTimer?.cancel();
     super.dispose();
   }
 
-  CardModel? get _currentCard {
-    if (widget.deck.cards.isEmpty || _currentIndex >= widget.deck.cards.length) {
-      return null;
-    }
-    return widget.deck.cards[_currentIndex];
-  }
-
-  int get _frontDuration {
-    return widget.deck.customFrontTimeSeconds ?? DEFAULT_FRONT_SECONDS;
-  }
-
-  int get _backDuration {
-    return widget.deck.customBackTimeSeconds ?? DEFAULT_BACK_SECONDS;
-  }
+  CardModel? get _currentCard => (_currentPlayList.isEmpty || _currentIndex >= _currentPlayList.length) ? null : _currentPlayList[_currentIndex];
+  int get _frontDuration => widget.deck.customFrontTimeSeconds ?? _globalFrontTime;
+  int get _backDuration => widget.deck.customBackTimeSeconds ?? _globalBackTime;
 
   void _startCardCycle() {
     if (_status != AutoplayStatus.playing || _currentCard == null) return;
+    _cardTimer?.cancel();
+    _transitionDelayTimer?.cancel();
+    _flipCardController.reset();
 
+    if (!mounted) return;
     setState(() {
       _showFront = true;
       _currentTimerDuration = _frontDuration;
       _timeRemaining = _frontDuration;
     });
-    _cardTimer?.cancel(); // Cancel any existing timer
 
     _cardTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_status != AutoplayStatus.playing) {
+      if (!mounted || _status != AutoplayStatus.playing) {
         timer.cancel();
         return;
       }
       setState(() {
         _timeRemaining--;
       });
-
       if (_timeRemaining <= 0) {
         timer.cancel();
-        if (_showFront) {
-          _showBackSide();
-        } else {
-          // Optional small delay before moving to the next card
-          _transitionDelayTimer = Timer(const Duration(milliseconds: 500), () {
-             _moveToNextCard();
-          });
-        }
+        _showBackSide();
       }
     });
   }
 
   void _showBackSide() {
-    if (_status != AutoplayStatus.playing || _currentCard == null) return;
+    if (!mounted || _status != AutoplayStatus.playing || _currentCard == null) return;
+    _cardTimer?.cancel();
+    _transitionDelayTimer?.cancel();
+    _flipCardController.flip();
 
     setState(() {
       _showFront = false;
       _currentTimerDuration = _backDuration;
       _timeRemaining = _backDuration;
     });
-    _cardTimer?.cancel();
 
     _cardTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_status != AutoplayStatus.playing) {
+      if (!mounted || _status != AutoplayStatus.playing) {
         timer.cancel();
         return;
       }
@@ -116,219 +160,147 @@ class _AutoplayScreenState extends State<AutoplayScreen> {
       });
       if (_timeRemaining <= 0) {
         timer.cancel();
-        // Optional small delay before moving to the next card
-        _transitionDelayTimer = Timer(const Duration(milliseconds: 500), () {
-            _moveToNextCard();
-        });
+        _transitionDelayTimer = Timer(const Duration(milliseconds: 500), _moveToNextCard);
       }
     });
   }
 
   void _moveToNextCard() {
-    if (_status != AutoplayStatus.playing) return;
-
-    if (_currentIndex < widget.deck.cards.length - 1) {
+    if (!mounted || _status != AutoplayStatus.playing) return;
+    if (_currentIndex < _currentPlayList.length - 1) {
       setState(() {
         _currentIndex++;
       });
       _startCardCycle();
     } else {
-      // Reached end of the deck
-      setState(() {
-        _status = AutoplayStatus.finished;
-        _currentTimerDuration = 0;
-        _timeRemaining = 0;
-      });
-      _cardTimer?.cancel();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Autoplay finished: End of deck reached."))
-      );
-      // Optionally, could implement looping here
+      if (_shouldLoop) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Looping deck...")));
+        _preparePlayList();
+        if (_currentPlayList.isNotEmpty) {
+          _startCardCycle();
+        } else {
+          if (mounted) setState(() => _status = AutoplayStatus.finished);
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _status = AutoplayStatus.finished;
+            _currentTimerDuration = 0;
+            _timeRemaining = 0;
+          });
+        }
+        _cardTimer?.cancel();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Autoplay finished: End of deck reached.")));
+      }
     }
   }
 
   void _togglePlayPause() {
+    if (_isLoadingSettings) return;
     if (_status == AutoplayStatus.playing) {
-      setState(() {
-        _status = AutoplayStatus.paused;
-      });
-      _cardTimer?.cancel(); // Pause the timer by cancelling it
+      setState(() => _status = AutoplayStatus.paused);
+      _cardTimer?.cancel();
+      _transitionDelayTimer?.cancel();
     } else if (_status == AutoplayStatus.paused) {
-      setState(() {
-        _status = AutoplayStatus.playing;
-      });
-      // Resume timer logic:
-      // If _showFront, continue with remaining _timeRemaining for front, then to _showBackSide
-      // If !_showFront, continue with remaining _timeRemaining for back, then to _moveToNextCard
-      // For simplicity in this version, we'll just restart the current side's timer
-      // A more sophisticated resume would continue from the exact point.
-      if (_showFront) {
-        _startCardCycle(); // This will restart the front timer
-      } else {
-        _showBackSide(); // This will restart the back timer
+      setState(() => _status = AutoplayStatus.playing);
+      if (_currentCard != null) {
+        if (_showFront) _startCardCycle(); else _showBackSide();
       }
-    } else if (_status == AutoplayStatus.finished) {
-      // Restart from beginning if finished
-      setState(() {
-        _currentIndex = 0;
-        _status = AutoplayStatus.playing;
-      });
+    } else if (_status == AutoplayStatus.finished && _currentPlayList.isNotEmpty) {
+      _preparePlayList();
+      setState(() => _status = AutoplayStatus.playing);
       _startCardCycle();
+    } else if (_currentPlayList.isEmpty && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No cards to play.")));
     }
   }
 
-  void _stopAutoplay() {
-    setState(() {
-      _status = AutoplayStatus.stopped;
-    });
+  Future<void> _stopAutoplay() async {
+    final bool wasFinished = _status == AutoplayStatus.finished;
+    final int indexToSave = (wasFinished || _currentCard == null) ? 0 : _currentIndex;
+    widget.deck.lastReviewedCardIndex = indexToSave;
+    widget.deck.lastStudiedAt = DateTime.now();
+    await _persistenceService.saveDeck(widget.deck);
+
+    if (mounted) setState(() => _status = AutoplayStatus.stopped);
     _cardTimer?.cancel();
     _transitionDelayTimer?.cancel();
-    Navigator.of(context).pop(); // Go back to deck list
+    if (mounted) Navigator.of(context).pop(true);
   }
 
+  void _toggleSessionShuffle(bool value) {
+    if (!mounted) return;
+    setState(() => _shouldShuffle = value);
+    _preparePlayList();
+    if ((_status == AutoplayStatus.playing || _status == AutoplayStatus.paused) && _currentPlayList.isNotEmpty) {
+      if (_status == AutoplayStatus.paused) setState(() => _status = AutoplayStatus.playing);
+      _startCardCycle();
+    } else if (_currentPlayList.isEmpty) {
+      setState(() => _status = AutoplayStatus.finished);
+    }
+  }
+
+  void _toggleSessionLoop(bool value) {
+    if (!mounted) setState(() => _shouldLoop = value);
+  }
+
+  void _showExplanationDialog() {
+    if (_currentCard?.explanation == null) return;
+    if (_status == AutoplayStatus.playing) _togglePlayPause();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Explanation'),
+        content: SingleChildScrollView(child: Text(_currentCard!.explanation!)),
+        actions: [TextButton(child: const Text('Close'), onPressed: () => Navigator.of(ctx).pop())],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoadingSettings) {
+      return Scaffold(appBar: AppBar(title: Text('Autoplay: ${widget.deck.title}')), body: const Center(child: CircularProgressIndicator()));
+    }
+
     final card = _currentCard;
-    final bool canPlayPause = _status == AutoplayStatus.playing || _status == AutoplayStatus.paused || _status == AutoplayStatus.finished;
+    final theme = Theme.of(context);
+    final cardContentStyle = theme.textTheme.displaySmall?.copyWith(fontSize: 32);
+
+    final frontWidget = Text(card?.frontText ?? (_currentPlayList.isEmpty ? "No cards to play." : "Autoplay Finished!"), textAlign: TextAlign.center, style: cardContentStyle);
+    final backWidget = Text(card?.backText ?? "---", textAlign: TextAlign.center, style: cardContentStyle);
+    final bool canPlayPause = _status == AutoplayStatus.playing || _status == AutoplayStatus.paused || (_status == AutoplayStatus.finished && _currentPlayList.isNotEmpty);
+    final bool shuffleToggleEnabled = _status == AutoplayStatus.playing || _status == AutoplayStatus.paused || (_status == AutoplayStatus.finished && _currentPlayList.isNotEmpty);
+    final bool isOriginalDeckEmpty = widget.deck.cards.isEmpty;
+
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Autoplay: ${widget.deck.title}'),
-        leading: IconButton(
-          icon: const Icon(Icons.close),
-          onPressed: _stopAutoplay,
-        ),
-      ),
+      appBar: AppBar(title: Text('Autoplay: ${widget.deck.title}'), leading: IconButton(icon: const Icon(Iconsax.close_circle), onPressed: _stopAutoplay)),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Progress Indicator
-            if (widget.deck.cards.isNotEmpty && _status != AutoplayStatus.finished)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8.0),
-                child: Text(
-                  'Card ${_currentIndex + 1} of ${widget.deck.cards.length}',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-              ),
-
-            // Card Display Area
-            Expanded(
-              child: Card(
-                elevation: 4.0,
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24.0),
-                    child: Text(
-                      card == null || _status == AutoplayStatus.stopped
-                          ? (widget.deck.cards.isEmpty ? "This deck has no cards." : "Autoplay stopped.")
-                          : (_status == AutoplayStatus.finished
-                              ? "Autoplay Finished!"
-                              : (_showFront ? card.frontText : card.backText)),
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.headlineMedium,
-                    ),
-                  ),
-                ),
-              ),
-            ),
+            if (_currentPlayList.isNotEmpty && _status != AutoplayStatus.finished && _status != AutoplayStatus.stopped)
+              Padding(padding: const EdgeInsets.symmetric(vertical: 8.0), child: Text('Card ${_currentIndex + 1} of ${_currentPlayList.length}', textAlign: TextAlign.center, style: theme.textTheme.titleMedium)),
+            Expanded(child: FlipCardWidget(controller: _flipCardController, front: frontWidget, back: backWidget)),
             const SizedBox(height: 10),
-
-            // Timer Progress Bar (Simple LinearProgressIndicator)
-            if (_status == AutoplayStatus.playing && _currentTimerDuration > 0)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8.0),
-                child: Column(
-                  children: [
-                    LinearProgressIndicator(
-                      value: (_currentTimerDuration - _timeRemaining) / _currentTimerDuration,
-                      minHeight: 10,
-                      backgroundColor: Colors.grey[300],
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        _showFront ? Colors.blueAccent : Colors.greenAccent
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text("Time remaining: $_timeRemaining s", style: Theme.of(context).textTheme.labelSmall),
-                  ],
-                ),
-              ),
-            if (_status == AutoplayStatus.paused)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8.0),
-                child: Text("Paused", textAlign: TextAlign.center, style: TextStyle(fontStyle: FontStyle.italic)),
-              ),
-
+            if (!_showFront && _currentCard?.explanation != null && _status != AutoplayStatus.finished)
+              Padding(padding: const EdgeInsets.only(bottom: 8.0), child: TextButton.icon(icon: const Icon(Iconsax.document_text_1), label: const Text('Why? Show Explanation'), onPressed: _showExplanationDialog)),
+            if (_status == AutoplayStatus.playing && _currentTimerDuration > 0 && card != null)
+              Padding(padding: const EdgeInsets.symmetric(vertical: 8.0), child: Column(children: [LinearProgressIndicator(value: (_currentTimerDuration > 0) ? ((_currentTimerDuration - _timeRemaining) / _currentTimerDuration) : 0, minHeight: 10, backgroundColor: Colors.grey[300], valueColor: AlwaysStoppedAnimation<Color>(_showFront ? theme.primaryColor : Colors.green)), const SizedBox(height: 4), Text("Time remaining: $_timeRemaining s", style: theme.textTheme.labelSmall)])),
+            if (_status == AutoplayStatus.paused && card != null)
+              const Padding(padding: EdgeInsets.symmetric(vertical: 8.0), child: Text("Paused", textAlign: TextAlign.center, style: TextStyle(fontStyle: FontStyle.italic))),
+            const SizedBox(height: 10),
+            Padding(padding: const EdgeInsets.symmetric(horizontal: 8.0), child: Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [Flexible(child: Column(mainAxisSize: MainAxisSize.min, children: [const Text("Shuffle"), Switch(value: _shouldShuffle, onChanged: isOriginalDeckEmpty ? null : (shuffleToggleEnabled ? _toggleSessionShuffle : null))])), Flexible(child: Column(mainAxisSize: MainAxisSize.min, children: [const Text("Loop Deck"), Switch(value: _shouldLoop, onChanged: isOriginalDeckEmpty ? null : _toggleSessionLoop)]))])),
             const SizedBox(height: 20),
-
-            // Control Buttons
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                // Previous Button (Manual Override - Optional for V1 Autoplay)
-                // IconButton(
-                //   icon: const Icon(Icons.skip_previous),
-                //   iconSize: 40,
-                //   onPressed: (_status == AutoplayStatus.playing || _status == AutoplayStatus.paused) ? _manualPrevious : null,
-                // ),
-                IconButton(
-                  icon: Icon(
-                    _status == AutoplayStatus.playing
-                        ? Icons.pause_circle_filled
-                        : Icons.play_circle_filled,
-                  ),
-                  iconSize: 60,
-                  color: Theme.of(context).primaryColor,
-                  onPressed: canPlayPause ? _togglePlayPause : null,
-                  tooltip: _status == AutoplayStatus.playing ? "Pause" : "Play",
-                ),
-                // Next Button (Manual Override - Optional for V1 Autoplay)
-                // IconButton(
-                //   icon: const Icon(Icons.skip_next),
-                //   iconSize: 40,
-                //   onPressed: (_status == AutoplayStatus.playing || _status == AutoplayStatus.paused) ? _manualNext : null,
-                // ),
-              ],
-            ),
+            Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [IconButton(icon: Icon(_status == AutoplayStatus.playing ? Iconsax.pause_circle : Iconsax.play_circle, size: 60), color: theme.primaryColor, onPressed: isOriginalDeckEmpty ? null : (canPlayPause ? _togglePlayPause : null), tooltip: _status == AutoplayStatus.playing ? "Pause" : "Play/Restart")]),
             const SizedBox(height: 20),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.stop_circle_outlined),
-              label: const Text('Stop Autoplay & Go Back'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.red,
-                side: const BorderSide(color: Colors.red),
-              ),
-              onPressed: _stopAutoplay,
-            ),
+            OutlinedButton.icon(icon: const Icon(Iconsax.stop_circle, size: 20), label: const Text('Stop Autoplay & Go Back'), style: OutlinedButton.styleFrom(foregroundColor: Colors.red, side: const BorderSide(color: Colors.red)), onPressed: _stopAutoplay),
           ],
         ),
       ),
     );
   }
-
-  // Placeholder for manual next/prev during autoplay if we add them later
-  // void _manualNext() {
-  //   _cardTimer?.cancel();
-  //   _transitionDelayTimer?.cancel();
-  //   if (_currentIndex < widget.deck.cards.length - 1) {
-  //     setState(() { _currentIndex++; });
-  //     _startCardCycle();
-  //   } else {
-  //      setState(() { _status = AutoplayStatus.finished; });
-  //   }
-  //   if (_status == AutoplayStatus.paused) _status = AutoplayStatus.playing; // resume if paused
-  // }
-  // void _manualPrevious() {
-  //   _cardTimer?.cancel();
-  //   _transitionDelayTimer?.cancel();
-  //   if (_currentIndex > 0) {
-  //     setState(() { _currentIndex--; });
-  //      _startCardCycle();
-  //   }
-  //   if (_status == AutoplayStatus.paused) _status = AutoplayStatus.playing; // resume if paused
-  // }
 }

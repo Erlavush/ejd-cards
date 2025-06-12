@@ -1,7 +1,12 @@
 // lib/features/study_mode/screens/manual_study_screen.dart
+
+import 'dart:math';
+import 'package:ejd_cards/core/models/card_model.dart';
+import 'package:ejd_cards/core/models/deck_model.dart';
+import 'package:ejd_cards/core/services/deck_persistence_service.dart';
+import 'package:ejd_cards/core/widgets/flip_card_widget.dart';
 import 'package:flutter/material.dart';
-import '../../../core/models/deck_model.dart';
-import '../../../core/models/card_model.dart';
+import 'package:iconsax_flutter/iconsax_flutter.dart';
 
 class ManualStudyScreen extends StatefulWidget {
   final DeckModel deck;
@@ -13,19 +18,48 @@ class ManualStudyScreen extends StatefulWidget {
 }
 
 class _ManualStudyScreenState extends State<ManualStudyScreen> {
-  int _currentIndex = 0; // Index of the current card being viewed
-  bool _showFront = true;  // True to show front, false to show back
+  int _currentIndex = 0;
+  bool _showFront = true;
+  bool _isShuffled = false;
+  List<CardModel> _studyOrderCards = [];
 
-  // Getter for the current card, handles empty deck case
-  CardModel? get _currentCard {
-    if (widget.deck.cards.isEmpty || _currentIndex >= widget.deck.cards.length) {
-      return null;
-    }
-    return widget.deck.cards[_currentIndex];
+  final Random _random = Random();
+  final FlipCardController _flipCardController = FlipCardController();
+  final DeckPersistenceService _persistenceService = DeckPersistenceService();
+
+  @override
+  void initState() {
+    super.initState();
+    _resetStudyOrder();
   }
 
+  void _resetStudyOrder() {
+    setState(() {
+      _studyOrderCards = List<CardModel>.from(widget.deck.cards);
+      if (_isShuffled && _studyOrderCards.isNotEmpty) {
+        _studyOrderCards.shuffle(_random);
+      }
+      _currentIndex = 0;
+      _showFront = true;
+      _flipCardController.reset();
+    });
+  }
+
+  void _toggleShuffle() {
+    setState(() {
+      _isShuffled = !_isShuffled;
+    });
+    _resetStudyOrder();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(_isShuffled ? 'Cards shuffled!' : 'Cards in original order.')),
+    );
+  }
+
+  CardModel? get _currentCard => (_studyOrderCards.isEmpty || _currentIndex >= _studyOrderCards.length) ? null : _studyOrderCards[_currentIndex];
+
   void _flipCard() {
-    if (_currentCard == null) return; // Don't do anything if there's no card
+    if (_currentCard == null) return;
+    _flipCardController.flip();
     setState(() {
       _showFront = !_showFront;
     });
@@ -33,21 +67,14 @@ class _ManualStudyScreenState extends State<ManualStudyScreen> {
 
   void _nextCard() {
     if (_currentCard == null) return;
-    if (_currentIndex < widget.deck.cards.length - 1) {
+    if (_currentIndex < _studyOrderCards.length - 1) {
       setState(() {
         _currentIndex++;
-        _showFront = true; // Always show front of new card first
+        _showFront = true;
       });
+      _flipCardController.reset();
     } else {
-      // Optional: Show a message or loop back to the beginning
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("You've reached the end of the deck!"))
-      );
-      // To loop:
-      // setState(() {
-      //   _currentIndex = 0;
-      //   _showFront = true;
-      // });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("You've reached the end of the deck!")));
     }
   }
 
@@ -56,112 +83,147 @@ class _ManualStudyScreenState extends State<ManualStudyScreen> {
     if (_currentIndex > 0) {
       setState(() {
         _currentIndex--;
-        _showFront = true; // Always show front of new card first
+        _showFront = true;
       });
+      _flipCardController.reset();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("You're at the beginning of the deck."))
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("You're at the beginning of the deck.")));
     }
+  }
+
+  Future<void> _markCardAs(bool needsReview) async {
+    if (_currentCard == null) return;
+    setState(() {
+      _currentCard!.needsReview = needsReview;
+    });
+
+    final originalCardIndex = widget.deck.cards.indexWhere((card) => card.id == _currentCard!.id);
+    if (originalCardIndex != -1) {
+      widget.deck.cards[originalCardIndex].needsReview = needsReview;
+    }
+
+    await _persistenceService.saveDeck(widget.deck);
+    _nextCard();
+  }
+
+  void _showExplanationDialog() {
+    if (_currentCard?.explanation == null) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Explanation'),
+        content: SingleChildScrollView(child: Text(_currentCard!.explanation!)),
+        actions: [TextButton(child: const Text('Close'), onPressed: () => Navigator.of(ctx).pop())],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final card = _currentCard; // Get the current card safely
+    final card = _currentCard;
+    final theme = Theme.of(context);
+    final cardContentStyle = theme.textTheme.displaySmall?.copyWith(fontSize: 32);
+
+    final frontWidget = Text(card?.frontText ?? "This deck is empty.", textAlign: TextAlign.center, style: cardContentStyle);
+    final backWidget = Text(card?.backText ?? "Add cards to study.", textAlign: TextAlign.center, style: cardContentStyle);
 
     return Scaffold(
       appBar: AppBar(
         title: Text('Study: ${widget.deck.title}'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        actions: [
+          Tooltip(
+            message: _isShuffled ? "Unshuffle Cards" : "Shuffle Cards",
+            child: IconButton(
+              icon: Icon(_isShuffled ? Iconsax.shuffle : Iconsax.shuffle),
+              onPressed: widget.deck.cards.length > 1 ? _toggleShuffle : null,
+            ),
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Progress Indicator
-            if (widget.deck.cards.isNotEmpty)
+            if (_studyOrderCards.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8.0),
-                child: Text(
-                  'Card ${_currentIndex + 1} of ${widget.deck.cards.length}',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
+                child: Text('Card ${_currentIndex + 1} of ${_studyOrderCards.length}', textAlign: TextAlign.center, style: theme.textTheme.titleMedium),
               ),
-
-            // Card Display Area
             Expanded(
-              child: GestureDetector( // Allow tapping the card to flip
-                onTap: _flipCard,
-                child: Card(
-                  elevation: 4.0,
-                  child: Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24.0),
-                      child: Text(
-                        card == null
-                            ? "This deck has no cards."
-                            : (_showFront ? card.frontText : card.backText),
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.headlineMedium,
-                      ),
-                    ),
-                  ),
-                ),
+              child: GestureDetector(
+                onTap: card != null ? _flipCard : null,
+                child: FlipCardWidget(controller: _flipCardController, front: frontWidget, back: backWidget),
               ),
             ),
             const SizedBox(height: 20),
-
-            // Control Buttons
-            if (card != null) // Only show buttons if there's a card
-              Column(
+            if (card != null)
+              _showFront
+                  ? ElevatedButton.icon(
+                      icon: const Icon(Iconsax.eye),
+                      label: const Text('Show Answer'),
+                      onPressed: _flipCard,
+                      style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 50)),
+                    )
+                  : Column(
+                      children: [
+                        if (card.explanation != null)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10.0),
+                            child: TextButton.icon(
+                              icon: const Icon(Iconsax.document_text_1),
+                              label: const Text('Why? Show Explanation'),
+                              onPressed: _showExplanationDialog,
+                            ),
+                          ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                icon: const Icon(Iconsax.dislike, color: Colors.white),
+                                label: const Text('Review Again'),
+                                onPressed: () => _markCardAs(true),
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, minimumSize: const Size(0, 50)),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: ElevatedButton.icon(
+                                icon: const Icon(Iconsax.like_1, color: Colors.white),
+                                label: const Text('I Knew This'),
+                                onPressed: () => _markCardAs(false),
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.green, minimumSize: const Size(0, 50)),
+                              ),
+                            )
+                          ],
+                        ),
+                      ],
+                    ),
+            const SizedBox(height: 10),
+            if (card != null)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  ElevatedButton.icon(
-                    icon: Icon(_showFront ? Icons.flip_to_back_outlined : Icons.flip_to_front_outlined),
-                    label: Text(_showFront ? 'Show Answer' : 'Show Question'),
-                    onPressed: _flipCard,
-                    style: ElevatedButton.styleFrom(
-                      minimumSize: const Size(double.infinity, 50), // full width
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Iconsax.arrow_left_2),
+                      label: const Text('Previous'),
+                      onPressed: _currentIndex > 0 ? _previousCard : null,
+                      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 50)),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.arrow_back_ios_new),
-                          label: const Text('Previous'),
-                          onPressed: _currentIndex > 0 ? _previousCard : null, // Disable if at first card
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size(0, 50),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          label: const Text('Next'),
-                          icon: const Icon(Icons.arrow_forward_ios),
-                          onPressed: _currentIndex < widget.deck.cards.length - 1 ? _nextCard : null, // Disable if at last card
-                          style: OutlinedButton.styleFrom(
-                            minimumSize: const Size(0, 50),
-                          ),
-                        ),
-                      ),
-                    ],
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      label: const Text('Next'),
+                      icon: const Icon(Iconsax.arrow_right_3),
+                      onPressed: _currentIndex < _studyOrderCards.length - 1 ? _nextCard : null,
+                      style: OutlinedButton.styleFrom(minimumSize: const Size(0, 50)),
+                    ),
                   ),
                 ],
               ),
-            const SizedBox(height: 20),
-            TextButton( // Back to Decks button
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Back to Decks List'),
-            )
+            const SizedBox(height: 10),
           ],
         ),
       ),

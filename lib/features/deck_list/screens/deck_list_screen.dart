@@ -1,20 +1,19 @@
 // lib/features/deck_list/screens/deck_list_screen.dart
+
+import 'dart:typed_data';
+import 'package:ejd_cards/features/deck_list/widgets/deck_list_item.dart';
+import 'package:ejd_cards/features/deck_management/screens/deck_edit_screen.dart';
+import 'package:ejd_cards/features/deck_management/services/deck_exporter_service.dart';
+import 'package:ejd_cards/features/deck_management/services/deck_importer_service.dart';
+import 'package:ejd_cards/features/settings/screens/settings_screen.dart';
+import 'package:ejd_cards/features/study_mode/screens/autoplay_screen.dart';
+import 'package:ejd_cards/features/study_mode/screens/manual_study_screen.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:uuid/uuid.dart'; // For generating unique IDs
-import 'package:file_picker/file_picker.dart'; // For file picking
-import 'dart:typed_data'; // For Uint8List (file bytes)
-
-// Core Models
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:iconsax_flutter/iconsax_flutter.dart';
 import '../../../core/models/deck_model.dart';
-import '../../../core/models/card_model.dart';
-
-// Screen Imports for Navigation
-import '../../study_mode/screens/manual_study_screen.dart';
-import '../../deck_management/screens/deck_edit_screen.dart';
-import '../../study_mode/screens/autoplay_screen.dart';
-
-// Service for Importing
-import '../../deck_management/services/deck_importer_service.dart';
+import '../../../core/services/deck_persistence_service.dart';
 
 class DeckListScreen extends StatefulWidget {
   const DeckListScreen({super.key});
@@ -25,45 +24,52 @@ class DeckListScreen extends StatefulWidget {
 
 class _DeckListScreenState extends State<DeckListScreen> {
   List<DeckModel> _decks = [];
-  final _uuid = const Uuid();
-  final DeckImporterService _importerService = DeckImporterService(); // Importer service instance
+  final DeckPersistenceService _persistenceService = DeckPersistenceService();
+  final DeckImporterService _importerService = DeckImporterService();
+  final DeckExporterService _exporterService = DeckExporterService();
+  bool _isLoading = true;
+  bool _isImporting = false;
 
   @override
   void initState() {
     super.initState();
-    _loadDummyDecks(); // Keep dummy decks for now, imported decks will be added
+    _loadPersistedDecks();
   }
 
-  // --- DUMMY DATA & MANAGEMENT (can be removed later if only importing) ---
-  void _loadDummyDecks() {
-    final card1_1 = CardModel(id: _uuid.v4(), frontText: "What is Flutter?", backText: "An open-source UI toolkit by Google.");
-    final card1_2 = CardModel(id: _uuid.v4(), frontText: "What is a Widget in Flutter?", backText: "Everything in Flutter is a widget.");
-
-    final card2_1 = CardModel(id: _uuid.v4(), frontText: "Capital of Japan?", backText: "Tokyo");
-
-    final deck1 = DeckModel(
-      id: _uuid.v4(),
-      title: "Flutter Basics (Dummy)",
-      cards: [card1_1, card1_2],
-      createdAt: DateTime.now().subtract(const Duration(days: 2)),
-    );
-
-    final deck2 = DeckModel(
-      id: _uuid.v4(),
-      title: "World Capitals (Dummy)",
-      cards: [card2_1],
-      createdAt: DateTime.now().subtract(const Duration(days: 1)),
-    );
-
+  Future<void> _loadPersistedDecks() async {
+    if (!mounted) return;
     setState(() {
-      _decks = [deck1, deck2];
+      _isLoading = true;
     });
+
+    final loadedDecks = await _persistenceService.loadDecks();
+
+    if (mounted) {
+      setState(() {
+        _decks = loadedDecks;
+        _isLoading = false;
+      });
+    }
   }
 
-  void _deleteDeck(String deckId) {
-    setState(() {
-      _decks.removeWhere((d) => d.id == deckId);
-    });
+  Future<void> _deleteDeckAndPersist(String deckId) async {
+    final deckToRemoveIndex = _decks.indexWhere((d) => d.id == deckId);
+    if (deckToRemoveIndex == -1) return;
+
+    final deckTitle = _decks[deckToRemoveIndex].title;
+    if (mounted) {
+      setState(() {
+        _decks.removeAt(deckToRemoveIndex);
+      });
+    }
+
+    await _persistenceService.deleteDeck(deckId);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Deck "$deckTitle" deleted.')),
+      );
+    }
   }
 
   void _showDeleteConfirmationDialog(DeckModel deck) {
@@ -76,19 +82,14 @@ class _DeckListScreenState extends State<DeckListScreen> {
           actions: <Widget>[
             TextButton(
               child: const Text('Cancel'),
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-              },
+              onPressed: () => Navigator.of(dialogContext).pop(),
             ),
             TextButton(
               style: TextButton.styleFrom(foregroundColor: Colors.red),
               child: const Text('Delete'),
               onPressed: () {
-                _deleteDeck(deck.id);
                 Navigator.of(dialogContext).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Deck "${deck.title}" deleted.')),
-                );
+                _deleteDeckAndPersist(deck.id);
               },
             ),
           ],
@@ -96,27 +97,24 @@ class _DeckListScreenState extends State<DeckListScreen> {
       },
     );
   }
-  // --- END DUMMY DATA & MANAGEMENT ---
 
-
-  // --- DECK IMPORT LOGIC ---
   Future<void> _pickAndImportDeck() async {
+    if (!mounted) return;
+    setState(() {
+      _isImporting = true;
+    });
+
     try {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['txt', 'fdeck'], // Allow .txt and our custom .fdeck
+        allowedExtensions: ['json'],
       );
 
       if (result != null && result.files.single.bytes != null) {
         Uint8List fileBytes = result.files.single.bytes!;
-        // In a real app, show a loading indicator here
-        // setState(() { _isLoadingImport = true; });
-
         ParseResult parseResult = await _importerService.importDeckFromFile(fileBytes);
 
-        // if (_isLoadingImport && mounted) setState(() { _isLoadingImport = false; });
-
-        if (mounted) { // Check if the widget is still in the tree
+        if (mounted) {
           if (parseResult.hasError) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -125,150 +123,244 @@ class _DeckListScreenState extends State<DeckListScreen> {
               ),
             );
           } else if (parseResult.deck != null) {
-            // Check if a deck with the same title already exists (optional)
             bool deckExists = _decks.any((deck) => deck.title.toLowerCase() == parseResult.deck!.title.toLowerCase());
             if (deckExists) {
-                 ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('A deck with the title "${parseResult.deck!.title}" already exists.')),
-                 );
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('A deck with the title "${parseResult.deck!.title}" already exists.')),
+              );
             } else {
-                setState(() {
-                  _decks.add(parseResult.deck!);
-                });
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text('Deck "${parseResult.deck!.title}" imported successfully!'),
-                    backgroundColor: Colors.green,
-                  ),
-                );
+              await _persistenceService.saveDeck(parseResult.deck!);
+              _loadPersistedDecks(); // Reload from storage to ensure consistency
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Deck "${parseResult.deck!.title}" imported successfully!'),
+                  backgroundColor: Colors.green,
+                ),
+              );
             }
           }
         }
-      } else {
-        // User canceled the picker or file was empty
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('No file selected or file is empty.')),
-          );
-        }
       }
     } catch (e) {
-      // Handle any other exceptions during file picking
-      // if (_isLoadingImport && mounted) setState(() { _isLoadingImport = false; });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('File picking failed: ${e.toString()}')),
         );
       }
       print("File picking error: $e");
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isImporting = false;
+        });
+      }
     }
   }
-  // --- END DECK IMPORT LOGIC ---
+
+  void _handleManualStudyStart(DeckModel deck) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => ManualStudyScreen(deck: deck)),
+    );
+  }
+
+  void _handleAutoplayStart(DeckModel deck) {
+    final int resumeIndex = deck.lastReviewedCardIndex ?? 0;
+    if (resumeIndex > 0 && deck.cards.length > resumeIndex) {
+      showDialog(
+        context: context,
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: const Text('Resume Study?'),
+            content: Text('You left off on card ${resumeIndex + 1}. Would you like to resume or start over?'),
+            actions: <Widget>[
+              TextButton(
+                child: const Text('Start Over'),
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  _navigateToAutoplay(deck, startIndex: 0);
+                },
+              ),
+              ElevatedButton(
+                child: const Text('Resume'),
+                onPressed: () {
+                  Navigator.of(dialogContext).pop();
+                  _navigateToAutoplay(deck, startIndex: resumeIndex);
+                },
+              ),
+            ],
+          );
+        },
+      );
+    } else {
+      _navigateToAutoplay(deck, startIndex: 0);
+    }
+  }
+
+  Future<void> _navigateToAutoplay(DeckModel deck, {required int startIndex}) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AutoplayScreen(deck: deck, startIndex: startIndex),
+      ),
+    );
+    if (result == true && mounted) {
+      _loadPersistedDecks();
+    }
+  }
+
+  Future<void> _handleDeckEdit(DeckModel deck) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => DeckEditScreen(initialDeck: deck)),
+    );
+    if (result == true && mounted) {
+      _loadPersistedDecks();
+    }
+  }
+
+  Future<void> _handleDeckExport(DeckModel deck) async {
+    final resultMessage = await _exporterService.exportDeck(deck);
+    if (mounted && resultMessage != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(resultMessage)),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('My Decks'),
-        // actions: [
-        //   IconButton(
-        //     icon: const Icon(Icons.settings),
-        //     onPressed: () {
-        //       // TODO: Navigate to settings screen
-        //     },
-        //   ),
-        // ],
+        centerTitle: true,
+        elevation: 0,
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        actions: [
+          IconButton(
+            icon: const Icon(Iconsax.setting_2),
+            tooltip: 'Settings',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
+            },
+          ),
+        ],
       ),
-      body: _buildDeckList(),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _pickAndImportDeck, // Calls the import function
-        label: const Text('Import Deck'),
-        icon: const Icon(Icons.file_upload),
-        tooltip: 'Import a deck from a text file',
+      body: _isLoading || _isImporting
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(_isImporting ? "Importing deck..." : "Loading decks..."),
+                ],
+              ),
+            )
+          : _buildDeckList(),
+      floatingActionButton: PopupMenuButton<String>(
+        tooltip: 'Add Deck',
+        onSelected: (String value) async {
+          if (value == 'create_manual') {
+            final result = await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const DeckEditScreen()),
+            );
+            if (result == true && mounted) {
+              _loadPersistedDecks();
+            }
+          } else if (value == 'import_file') {
+            _pickAndImportDeck();
+          }
+        },
+        itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+          const PopupMenuItem<String>(
+            value: 'create_manual',
+            child: ListTile(
+              leading: Icon(Iconsax.edit),
+              title: Text('Create Manually'),
+            ),
+          ),
+          const PopupMenuItem<String>(
+            value: 'import_file',
+            child: ListTile(
+              leading: Icon(Iconsax.document_upload),
+              title: Text('Import from JSON'),
+            ),
+          ),
+        ],
+        child: Container(
+          padding: const EdgeInsets.all(16.0),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary,
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                blurRadius: 8.0,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: const Icon(Iconsax.add, color: Colors.white, size: 28),
+        ),
       ),
     );
   }
 
   Widget _buildDeckList() {
     if (_decks.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(16.0),
-          child: Text(
-            'No decks yet. Tap "Import Deck" to add a deck from a file!',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 18.0, color: Colors.grey),
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              const Icon(Iconsax.safe_home, size: 80.0, color: Colors.grey),
+              const SizedBox(height: 24.0),
+              Text('Your Bookshelf is Empty', style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 12.0),
+              Text(
+                'Tap the "+" button to create a new deck or import one from a file.',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.grey[600]),
+              ),
+            ],
           ),
         ),
       );
     }
 
-    return ListView.builder(
-      itemCount: _decks.length,
-      itemBuilder: (context, index) {
-        final deck = _decks[index];
-        return Card(
-          margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-              child: Text(
-                deck.title.isNotEmpty ? deck.title[0].toUpperCase() : "?",
-                style: TextStyle(color: Theme.of(context).colorScheme.onPrimaryContainer),
-              ),
-            ),
-            title: Text(deck.title, style: const TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text('${deck.cardCount} card${deck.cardCount == 1 ? "" : "s"}'),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.play_circle_fill_outlined),
-                  color: Colors.green,
-                  tooltip: 'Autoplay',
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => AutoplayScreen(deck: deck),
-                      ),
-                    );
-                  },
-                ),
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined),
-                  color: Colors.blue,
-                  tooltip: 'Edit Deck',
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => DeckEditScreen(deck: deck),
-                      ),
-                    );
-                  },
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  color: Colors.red,
-                  tooltip: 'Delete Deck',
-                  onPressed: () {
-                    _showDeleteConfirmationDialog(deck);
-                  },
-                ),
-              ],
-            ),
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => ManualStudyScreen(deck: deck),
-                ),
-              );
-            },
-          ),
-        );
-      },
-    );
-  }
+  return ListView.builder(
+    padding: const EdgeInsets.only(bottom: 80), // Padding to avoid FAB overlap
+    itemCount: _decks.length,
+    itemBuilder: (context, index) {
+      final deck = _decks[index];
+      return DeckListItem(
+        deck: deck,
+        onStudy: () => _handleManualStudyStart(deck),
+        onPlay: () => _handleAutoplayStart(deck),
+        onEdit: () => _handleDeckEdit(deck),
+        onDelete: () => _showDeleteConfirmationDialog(deck),
+        onExport: () => _handleDeckExport(deck),
+      )
+          .animate()
+          .fadeIn(
+            duration: 400.ms,
+            curve: Curves.easeOut,
+            delay: (index * 100).ms,
+          )
+          .slideY(
+            begin: 0.2,
+            end: 0,
+            duration: 400.ms,
+            curve: Curves.easeOut,
+            delay: (index * 100).ms,
+          );
+    },
+  );
+}
 }
