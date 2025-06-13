@@ -5,7 +5,7 @@ import 'package:iconsax_flutter/iconsax_flutter.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/services/deck_persistence_service.dart';
 import '../../../core/services/settings_service.dart';
-import '../../../main.dart'; // To reset themeNotifier
+import '../../../main.dart'; // To reset themeNotifier and get AppThemeMode
 
 class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
@@ -47,14 +47,14 @@ class _AboutPageState extends State<AboutPage> {
               await DeckPersistenceService().deleteAllDecks();
 
               final settings = SettingsService();
-              await settings.setThemeMode(ThemeMode.system);
+              await settings.setThemeMode(AppThemeMode.system);
               await settings.setDefaultFrontTime(SettingsService.defaultFrontSeconds);
               await settings.setDefaultBackTime(SettingsService.defaultBackSeconds);
               await settings.setAutoplayShuffle(SettingsService.defaultShuffle);
               await settings.setAutoplayLoop(SettingsService.defaultLoop);
 
               // Update the global notifier to reflect the theme reset instantly
-              themeNotifier.value = ThemeMode.system;
+              themeNotifier.value = AppThemeMode.system;
 
               // Close the dialog
               if (mounted) Navigator.of(ctx).pop();
@@ -63,7 +63,7 @@ class _AboutPageState extends State<AboutPage> {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('App data has been reset.')),
                 );
-                // Pop back two screens to get to the deck list, forcing a refresh
+                // Pop all the way back to the deck list, which will then be forced to refresh
                 Navigator.of(context).popUntil((route) => route.isFirst);
               }
             },

@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconsax_flutter/iconsax_flutter.dart';
 import '../../../core/services/settings_service.dart';
-import '../../../main.dart'; // To access the global themeNotifier
+import '../../../main.dart'; // To access AppThemeMode and themeNotifier
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -74,7 +74,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Invalid time. Please enter a positive number.')),
       );
-      _frontTimeController.text = _defaultFrontTime.toString(); // Revert to old value
+      _frontTimeController.text = _defaultFrontTime.toString();
     }
   }
 
@@ -94,7 +94,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Invalid time. Please enter a positive number.')),
       );
-      _backTimeController.text = _defaultBackTime.toString(); // Revert to old value
+      _backTimeController.text = _defaultBackTime.toString();
     }
   }
 
@@ -116,11 +116,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _changeTheme(ThemeMode? newMode) async {
+  Future<void> _changeTheme(AppThemeMode? newMode) async {
     if (newMode == null) return;
-    // Update the global notifier, which will rebuild the UI across the app
     themeNotifier.value = newMode;
-    // Persist the new choice for the next app launch
     await _settingsService.setThemeMode(newMode);
   }
 
@@ -145,12 +143,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             contentPadding: const EdgeInsets.symmetric(horizontal: 4),
             leading: const Icon(Iconsax.brush_1),
             title: const Text('Theme'),
-            trailing: DropdownButton<ThemeMode>(
+            trailing: DropdownButton<AppThemeMode>(
               value: themeNotifier.value,
               items: const [
-                DropdownMenuItem(value: ThemeMode.system, child: Text('System Default')),
-                DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
-                DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+                DropdownMenuItem(value: AppThemeMode.system, child: Text('System Default')),
+                DropdownMenuItem(value: AppThemeMode.light, child: Text('Light')),
+                DropdownMenuItem(value: AppThemeMode.dark, child: Text('Dark (Grey)')),
+                DropdownMenuItem(value: AppThemeMode.amoled, child: Text('Dark (AMOLED)')),
               ],
               onChanged: _changeTheme,
             ),
@@ -216,6 +215,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             textAlign: TextAlign.center,
             decoration: const InputDecoration(border: OutlineInputBorder()),
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) return null;
+              final num = int.tryParse(value.trim());
+              if (num == null || num <= 0) return 'Must be >0';
+              return null;
+            },
           ),
         ),
         const SizedBox(width: 10),

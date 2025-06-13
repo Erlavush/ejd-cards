@@ -1,11 +1,11 @@
 // lib/core/services/settings_service.dart
 
-import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../main.dart'; // Import to get the AppThemeMode enum
 
 class SettingsService {
   // Define keys for shared_preferences
-  static const String _keyThemeMode = 'themeMode';
+  static const String _keyThemeMode = 'appThemeMode'; // Using a more specific key
   static const String _keyDefaultFrontTime = 'defaultFrontTime';
   static const String _keyDefaultBackTime = 'defaultBackTime';
   static const String _keyAutoplayShuffle = 'autoplayShuffle';
@@ -23,17 +23,18 @@ class SettingsService {
   }
 
   // --- Theme Mode ---
-  Future<void> setThemeMode(ThemeMode mode) async {
+  Future<void> setThemeMode(AppThemeMode mode) async {
     final prefs = await _getPrefs();
     await prefs.setString(_keyThemeMode, mode.name);
   }
 
-  Future<ThemeMode> getThemeMode() async {
+  Future<AppThemeMode> getThemeMode() async {
     final prefs = await _getPrefs();
     final themeString = prefs.getString(_keyThemeMode);
-    return ThemeMode.values.firstWhere(
+    // Find the AppThemeMode that matches the stored string, or default to system
+    return AppThemeMode.values.firstWhere(
       (e) => e.name == themeString,
-      orElse: () => ThemeMode.system, // Default to system if not found
+      orElse: () => AppThemeMode.system,
     );
   }
 
