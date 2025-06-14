@@ -36,15 +36,10 @@ class DeckListItem extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
         padding: const EdgeInsets.all(16.0),
         decoration: BoxDecoration(
-          color: colorScheme.surface,
-          borderRadius: BorderRadius.circular(16.0),
-          boxShadow: [
-            BoxShadow(
-              color: colorScheme.shadow.withOpacity(0.05),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
+          color: colorScheme.surfaceContainerHigh, // M3 Change
+          borderRadius: BorderRadius.circular(12.0), // M3 Change
+          border: Border.all(color: colorScheme.outlineVariant, width: 1.0), // M3 Change
+          // boxShadow removed for M3 style
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -56,7 +51,7 @@ class DeckListItem extends StatelessWidget {
                 Expanded(
                   child: Text(
                     deck.title,
-                    style: theme.textTheme.titleLarge?.copyWith(
+                    style: theme.textTheme.titleMedium?.copyWith( // M3 Change
                       fontWeight: FontWeight.bold,
                       color: colorScheme.onSurface,
                     ),
@@ -82,7 +77,10 @@ class DeckListItem extends StatelessWidget {
                     ),
                     const PopupMenuItem<String>(
                       value: 'delete',
-                      child: ListTile(leading: Icon(Iconsax.trash, color: Colors.red), title: Text('Delete', style: TextStyle(color: Colors.red))),
+                      child: ListTile(
+                        leading: Icon(Iconsax.trash, color: theme.colorScheme.error), // M3 Change
+                        title: Text('Delete', style: TextStyle(color: theme.colorScheme.error)), // M3 Change
+                      ),
                     ),
                   ],
                 ),
@@ -91,11 +89,11 @@ class DeckListItem extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               '${deck.cardCount} card${deck.cardCount == 1 ? "" : "s"}',
-              style: theme.textTheme.bodyMedium?.copyWith(
+              style: theme.textTheme.bodySmall?.copyWith( // M3 Change
                 color: colorScheme.onSurfaceVariant,
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12), // M3 Change (was 16)
             Row(
               children: [
                 Expanded(
@@ -104,7 +102,7 @@ class DeckListItem extends StatelessWidget {
                     children: [
                       Text(
                         'Progress: ${(progress * 100).toStringAsFixed(0)}%',
-                        style: theme.textTheme.labelSmall?.copyWith(
+                        style: theme.textTheme.labelMedium?.copyWith( // M3 Change
                           color: colorScheme.onSurfaceVariant,
                         ),
                       ),
@@ -114,7 +112,7 @@ class DeckListItem extends StatelessWidget {
                         child: LinearProgressIndicator(
                           value: progress > 1.0 ? 1.0 : progress, // Ensure value is not > 1
                           minHeight: 8,
-                          backgroundColor: colorScheme.surfaceVariant,
+                          backgroundColor: colorScheme.surfaceContainerHighest, // M3 Change
                           valueColor: AlwaysStoppedAnimation<Color>(colorScheme.primary),
                         ),
                       ),
@@ -122,16 +120,10 @@ class DeckListItem extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 16),
-                ElevatedButton(
-                  onPressed: deck.cardCount > 0 ? onPlay : null, // Disable play if no cards
-                  style: ElevatedButton.styleFrom(
-                    shape: const CircleBorder(),
-                    padding: const EdgeInsets.all(12),
-                    backgroundColor: colorScheme.primary,
-                    foregroundColor: colorScheme.onPrimary,
-                  ),
-
-                  child: Icon(Iconsax.play, size: 28),
+                IconButton.filled( // M3 Change
+                  icon: const Icon(Iconsax.play, size: 24),
+                  tooltip: 'Autoplay deck',
+                  onPressed: deck.cardCount > 0 ? onPlay : null,
                 ),
               ],
             ),

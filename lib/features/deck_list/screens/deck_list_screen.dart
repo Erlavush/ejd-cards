@@ -8,6 +8,7 @@ import 'package:ejd_cards/features/deck_management/services/deck_importer_servic
 import 'package:ejd_cards/features/settings/screens/settings_screen.dart';
 import 'package:ejd_cards/features/study_mode/screens/autoplay_screen.dart';
 import 'package:ejd_cards/features/study_mode/screens/manual_study_screen.dart';
+import 'package:ejd_cards/features/deck_list/widgets/deck_list_item_shimmer.dart'; // Added import
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -67,7 +68,11 @@ class _DeckListScreenState extends State<DeckListScreen> {
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Deck "$deckTitle" deleted.')),
+        SnackBar(
+          content: Text('Deck "$deckTitle" deleted.'),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(8),
+        ),
       );
     }
   }
@@ -85,7 +90,7 @@ class _DeckListScreenState extends State<DeckListScreen> {
               onPressed: () => Navigator.of(dialogContext).pop(),
             ),
             TextButton(
-              style: TextButton.styleFrom(foregroundColor: Colors.red),
+              style: TextButton.styleFrom(foregroundColor: Theme.of(dialogContext).colorScheme.error), // M3 Change
               child: const Text('Delete'),
               onPressed: () {
                 Navigator.of(dialogContext).pop();
@@ -115,26 +120,35 @@ class _DeckListScreenState extends State<DeckListScreen> {
         ParseResult parseResult = await _importerService.importDeckFromFile(fileBytes);
 
         if (mounted) {
+          final colorScheme = Theme.of(context).colorScheme;
           if (parseResult.hasError) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Import Error: ${parseResult.error}'),
-                backgroundColor: Colors.redAccent,
+                content: Text('Import Error: ${parseResult.error}', style: TextStyle(color: colorScheme.onErrorContainer)),
+                backgroundColor: colorScheme.errorContainer,
+                behavior: SnackBarBehavior.floating,
+                margin: const EdgeInsets.all(8),
               ),
             );
           } else if (parseResult.deck != null) {
             bool deckExists = _decks.any((deck) => deck.title.toLowerCase() == parseResult.deck!.title.toLowerCase());
             if (deckExists) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('A deck with the title "${parseResult.deck!.title}" already exists.')),
+                SnackBar(
+                  content: Text('A deck with the title "${parseResult.deck!.title}" already exists.'),
+                  behavior: SnackBarBehavior.floating,
+                  margin: const EdgeInsets.all(8),
+                ),
               );
             } else {
               await _persistenceService.saveDeck(parseResult.deck!);
               _loadPersistedDecks(); // Reload from storage to ensure consistency
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text('Deck "${parseResult.deck!.title}" imported successfully!'),
-                  backgroundColor: Colors.green,
+                  content: Text('Deck "${parseResult.deck!.title}" imported successfully!', style: TextStyle(color: colorScheme.onPrimaryContainer)),
+                  backgroundColor: colorScheme.primaryContainer,
+                  behavior: SnackBarBehavior.floating,
+                  margin: const EdgeInsets.all(8),
                 ),
               );
             }
@@ -143,8 +157,14 @@ class _DeckListScreenState extends State<DeckListScreen> {
       }
     } catch (e) {
       if (mounted) {
+        final colorScheme = Theme.of(context).colorScheme;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('File picking failed: ${e.toString()}')),
+          SnackBar(
+            content: Text('File picking failed: ${e.toString()}', style: TextStyle(color: colorScheme.onErrorContainer)),
+            backgroundColor: colorScheme.errorContainer,
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(8),
+          ),
         );
       }
       print("File picking error: $e");
@@ -223,7 +243,11 @@ class _DeckListScreenState extends State<DeckListScreen> {
     final resultMessage = await _exporterService.exportDeck(deck);
     if (mounted && resultMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(resultMessage)),
+        SnackBar(
+          content: Text(resultMessage),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(8),
+        ),
       );
     }
   }
@@ -249,65 +273,84 @@ class _DeckListScreenState extends State<DeckListScreen> {
           ),
         ],
       ),
-      body: _isLoading || _isImporting
-          ? Center(
+      body: _isImporting
+          ? Center( // Specific state for importing
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   const CircularProgressIndicator(),
                   const SizedBox(height: 16),
-                  Text(_isImporting ? "Importing deck..." : "Loading decks..."),
+                  Text("Importing deck..."),
                 ],
               ),
             )
-          : _buildDeckList(),
-      floatingActionButton: PopupMenuButton<String>(
+          : _isLoading
+              ? _buildShimmerList() // Shimmer for initial loading
+              : _buildDeckList(), // Actual deck list
+      floatingActionButton: FloatingActionButton(
         tooltip: 'Add Deck',
-        onSelected: (String value) async {
-          if (value == 'create_manual') {
-            final result = await Navigator.push(
-              context,
-              MaterialPageRoute(builder: (context) => const DeckEditScreen()),
-            );
-            if (result == true && mounted) {
-              _loadPersistedDecks();
-            }
-          } else if (value == 'import_file') {
-            _pickAndImportDeck();
-          }
-        },
-        itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-          const PopupMenuItem<String>(
-            value: 'create_manual',
-            child: ListTile(
-              leading: Icon(Iconsax.edit),
-              title: Text('Create Manually'),
-            ),
-          ),
-          const PopupMenuItem<String>(
-            value: 'import_file',
-            child: ListTile(
-              leading: Icon(Iconsax.document_upload),
-              title: Text('Import from JSON'),
-            ),
-          ),
-        ],
-        child: Container(
-          padding: const EdgeInsets.all(16.0),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
-                blurRadius: 8.0,
-                offset: const Offset(0, 4),
+        onPressed: () => _showAddOptionsBottomSheet(context),
+        child: const Icon(Iconsax.add),
+        // Standard FABs in M3 should use colorScheme.primary and onPrimary by default.
+        // If not, explicit styling can be added:
+        // backgroundColor: Theme.of(context).colorScheme.primary,
+        // foregroundColor: Theme.of(context).colorScheme.onPrimary,
+      ),
+    );
+  }
+
+  void _showAddOptionsBottomSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      // isScrollControlled: true, // Useful if content is tall
+      builder: (BuildContext sheetContext) {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16.0, top: 8.0), // Added top padding as well
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16.0),
+                child: Text(
+                  'Add a new deck',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Iconsax.edit),
+                title: const Text('Create Manually'),
+                onTap: () async {
+                  Navigator.of(sheetContext).pop(); // Close the bottom sheet
+                  final result = await Navigator.push(
+                    context, // Use the original context for navigation
+                    MaterialPageRoute(builder: (context) => const DeckEditScreen()),
+                  );
+                  if (result == true && mounted) {
+                    _loadPersistedDecks();
+                  }
+                },
+              ),
+              ListTile(
+                leading: const Icon(Iconsax.document_upload),
+                title: const Text('Import from JSON'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop(); // Close the bottom sheet
+                  _pickAndImportDeck();
+                },
               ),
             ],
           ),
-          child: const Icon(Iconsax.add, color: Colors.white, size: 28),
-        ),
-      ),
+        );
+      },
+    );
+  }
+
+  Widget _buildShimmerList() {
+    return ListView.builder(
+      itemCount: 5, // Display 5 shimmer items
+      itemBuilder: (context, index) {
+        return const DeckListItemShimmer();
+      },
     );
   }
 
@@ -319,19 +362,26 @@ class _DeckListScreenState extends State<DeckListScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
-              const Icon(Iconsax.safe_home, size: 80.0, color: Colors.grey),
+              Icon(Iconsax.box_1, size: 100.0, color: Theme.of(context).colorScheme.secondaryContainer),
               const SizedBox(height: 24.0),
-              Text('Your Bookshelf is Empty', style: Theme.of(context).textTheme.headlineSmall),
+              Text(
+                'Your Bookshelf is Empty',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onBackground,
+                    ),
+              ),
               const SizedBox(height: 12.0),
               Text(
                 'Tap the "+" button to create a new deck or import one from a file.',
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.grey[600]),
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
               ),
             ],
           ),
         ),
-      );
+      ).animate().fadeIn(duration: 500.ms, curve: Curves.easeOut);
     }
 
   return ListView.builder(
