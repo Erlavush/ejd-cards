@@ -2,6 +2,7 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'package:ejd_cards/core/models/folder_model.dart';
 import 'package:flutter/foundation.dart' show kIsWeb; // Important for checking platform
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,13 +10,16 @@ import '../models/deck_model.dart';
 
 class DeckPersistenceService {
   // --- For Web ---
-  static const String _webStorageKey = 'all_decks_storage';
+  // This key now points to a JSON object containing both decks and folders.
+  // e.g., { "decks": [...], "folders": [...] }
+  static const String _webStorageContainerKey = 'app_data_storage';
 
   // --- For Mobile/Desktop ---
   static const String _decksFolderName = "flashcard_decks";
+  static const String _foldersFolderName = "flashcard_folders";
 
-  // Gets the directory where decks are stored, creating it if it doesn't exist.
-  // This method is ONLY for non-web platforms.
+  // --- Directory Helpers (Mobile/Desktop) ---
+
   Future<Directory> _getDecksDirectory() async {
     final appDocDir = await getApplicationDocumentsDirectory();
     final decksDir = Directory('${appDocDir.path}/$_decksFolderName');
@@ -25,29 +29,74 @@ class DeckPersistenceService {
     return decksDir;
   }
 
-  // Gets the full file path for a given deck ID.
-  Future<String> _getFilePath(String deckId) async {
+  Future<Directory> _getFoldersDirectory() async {
+    final appDocDir = await getApplicationDocumentsDirectory();
+    final foldersDir = Directory('${appDocDir.path}/$_foldersFolderName');
+    if (!await foldersDir.exists()) {
+      await foldersDir.create(recursive: true);
+    }
+    return foldersDir;
+  }
+
+  Future<String> _getDeckFilePath(String deckId) async {
     final dir = await _getDecksDirectory();
     return '${dir.path}/$deckId.json';
   }
 
-  // --- Platform-Aware Methods ---
+  Future<String> _getFolderFilePath(String folderId) async {
+    final dir = await _getFoldersDirectory();
+    return '${dir.path}/$folderId.json';
+  }
+
+  // --- Web Storage Helpers ---
+
+  Future<Map<String, dynamic>> _loadWebContainer() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? jsonString = prefs.getString(_webStorageContainerKey);
+    if (jsonString == null) {
+      return {'decks': [], 'folders': []}; // Return empty structure
+    }
+    try {
+      final data = jsonDecode(jsonString);
+      return {
+        'decks': data['decks'] ?? [],
+        'folders': data['folders'] ?? [],
+      };
+    } catch (e) {
+      print("Error loading web container, resetting. Error: $e");
+      return {'decks': [], 'folders': []};
+    }
+  }
+
+  Future<void> _saveWebContainer(List<DeckModel> decks, List<FolderModel> folders) async {
+    final prefs = await SharedPreferences.getInstance();
+    final containerMap = {
+      'decks': decks.map((d) => d.toMap()).toList(),
+      'folders': folders.map((f) => f.toMap()).toList(),
+    };
+    final jsonString = jsonEncode(containerMap);
+    await prefs.setString(_webStorageContainerKey, jsonString);
+    print('Saved ${decks.length} decks and ${folders.length} folders to web storage.');
+  }
+
+  // --- Deck Methods ---
 
   Future<void> saveDeck(DeckModel deck) async {
     if (kIsWeb) {
-      // WEB: Load all decks, add/update this one, save all back.
-      final decks = await loadDecks();
+      final container = await _loadWebContainer();
+      final decks = (container['decks'] as List).map((d) => DeckModel.fromMap(d)).toList();
+      final folders = (container['folders'] as List).map((f) => FolderModel.fromMap(f)).toList();
+      
       final index = decks.indexWhere((d) => d.id == deck.id);
       if (index != -1) {
-        decks[index] = deck; // Update existing
+        decks[index] = deck;
       } else {
-        decks.add(deck); // Add new
+        decks.add(deck);
       }
-      await _saveAllDecksForWeb(decks);
+      await _saveWebContainer(decks, folders);
     } else {
-      // MOBILE/DESKTOP: Save to individual file.
       try {
-        final filePath = await _getFilePath(deck.id);
+        final filePath = await _getDeckFilePath(deck.id);
         final file = File(filePath);
         final jsonString = const JsonEncoder.withIndent('  ').convert(deck.toMap());
         await file.writeAsString(jsonString);
@@ -60,23 +109,11 @@ class DeckPersistenceService {
 
   Future<List<DeckModel>> loadDecks() async {
     if (kIsWeb) {
-      // WEB: Load the single JSON string from shared_preferences.
-      try {
-        final prefs = await SharedPreferences.getInstance();
-        final String? allDecksJson = prefs.getString(_webStorageKey);
-        if (allDecksJson == null) {
-          return [];
-        }
-        final List<dynamic> deckList = jsonDecode(allDecksJson);
-        final decks = deckList.map((map) => DeckModel.fromMap(map)).toList();
-        print('Loaded ${decks.length} decks from web storage.');
-        return decks;
-      } catch (e) {
-        print('Error loading decks from web storage: $e');
-        return [];
-      }
+      final container = await _loadWebContainer();
+      final decks = (container['decks'] as List).map((d) => DeckModel.fromMap(d)).toList();
+      print('Loaded ${decks.length} decks from web storage.');
+      return decks;
     } else {
-      // MOBILE/DESKTOP: Load all individual files.
       try {
         final dir = await _getDecksDirectory();
         final List<DeckModel> decks = [];
@@ -104,18 +141,32 @@ class DeckPersistenceService {
 
   Future<void> deleteDeck(String deckId) async {
     if (kIsWeb) {
-      // WEB: Load all, remove one, save all back.
-      final decks = await loadDecks();
+      final container = await _loadWebContainer();
+      final decks = (container['decks'] as List).map((d) => DeckModel.fromMap(d)).toList();
+      final folders = (container['folders'] as List).map((f) => FolderModel.fromMap(f)).toList();
+      
       decks.removeWhere((deck) => deck.id == deckId);
-      await _saveAllDecksForWeb(decks);
+      // Also remove this deckId from any folder that contains it
+      for (var folder in folders) {
+        folder.deckIds.remove(deckId);
+      }
+
+      await _saveWebContainer(decks, folders);
     } else {
-      // MOBILE/DESKTOP: Delete the individual file.
       try {
-        final filePath = await _getFilePath(deckId);
+        final filePath = await _getDeckFilePath(deckId);
         final file = File(filePath);
         if (await file.exists()) {
           await file.delete();
           print('Deck file deleted: $deckId.json');
+        }
+        // We also need to update any folder that contains this deckId
+        final folders = await loadFolders();
+        for (var folder in folders) {
+          if (folder.deckIds.contains(deckId)) {
+            folder.deckIds.remove(deckId);
+            await saveFolder(folder);
+          }
         }
       } catch (e) {
         print('Error deleting deck file $deckId.json: $e');
@@ -123,33 +174,114 @@ class DeckPersistenceService {
     }
   }
 
-  Future<void> deleteAllDecks() async {
+  // --- Folder Methods ---
+
+  Future<void> saveFolder(FolderModel folder) async {
     if (kIsWeb) {
-      // WEB: Just remove the key from shared_preferences.
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_webStorageKey);
-      print('All web storage decks deleted.');
+      final container = await _loadWebContainer();
+      final decks = (container['decks'] as List).map((d) => DeckModel.fromMap(d)).toList();
+      final folders = (container['folders'] as List).map((f) => FolderModel.fromMap(f)).toList();
+      
+      final index = folders.indexWhere((f) => f.id == folder.id);
+      if (index != -1) {
+        folders[index] = folder;
+      } else {
+        folders.add(folder);
+      }
+      await _saveWebContainer(decks, folders);
     } else {
-      // MOBILE/DESKTOP: Delete the whole directory.
       try {
-        final dir = await _getDecksDirectory();
-        if (await dir.exists()) {
-          await dir.delete(recursive: true);
-          print('All deck files deleted.');
-          await _getDecksDirectory();
-        }
+        final filePath = await _getFolderFilePath(folder.id);
+        final file = File(filePath);
+        final jsonString = const JsonEncoder.withIndent('  ').convert(folder.toMap());
+        await file.writeAsString(jsonString);
+        print('Folder saved: ${folder.title} to $filePath');
       } catch (e) {
-        print('Error deleting all decks: $e');
+        print('Error saving folder ${folder.id}: $e');
       }
     }
   }
 
-  // Helper method specifically for saving all decks on the web
-  Future<void> _saveAllDecksForWeb(List<DeckModel> decks) async {
-    final prefs = await SharedPreferences.getInstance();
-    final List<Map<String, dynamic>> deckListMap = decks.map((deck) => deck.toMap()).toList();
-    final allDecksJson = jsonEncode(deckListMap);
-    await prefs.setString(_webStorageKey, allDecksJson);
-    print('Saved ${decks.length} decks to web storage.');
+  Future<List<FolderModel>> loadFolders() async {
+    if (kIsWeb) {
+      final container = await _loadWebContainer();
+      final folders = (container['folders'] as List).map((f) => FolderModel.fromMap(f)).toList();
+      print('Loaded ${folders.length} folders from web storage.');
+      return folders;
+    } else {
+      try {
+        final dir = await _getFoldersDirectory();
+        final List<FolderModel> folders = [];
+        final List<FileSystemEntity> entities = await dir.list().toList();
+
+        for (FileSystemEntity entity in entities) {
+          if (entity is File && entity.path.endsWith('.json')) {
+            try {
+              final jsonString = await entity.readAsString();
+              final Map<String, dynamic> jsonMap = jsonDecode(jsonString);
+              folders.add(FolderModel.fromMap(jsonMap));
+            } catch (e) {
+              print('Error reading or parsing folder file ${entity.path}: $e');
+            }
+          }
+        }
+        print('Loaded ${folders.length} folders from file system.');
+        return folders;
+      } catch (e) {
+        print('Error loading folders directory: $e');
+        return [];
+      }
+    }
+  }
+
+  Future<void> deleteFolder(String folderId) async {
+    if (kIsWeb) {
+      final container = await _loadWebContainer();
+      final decks = (container['decks'] as List).map((d) => DeckModel.fromMap(d)).toList();
+      final folders = (container['folders'] as List).map((f) => FolderModel.fromMap(f)).toList();
+      
+      folders.removeWhere((folder) => folder.id == folderId);
+      await _saveWebContainer(decks, folders);
+    } else {
+      try {
+        final filePath = await _getFolderFilePath(folderId);
+        final file = File(filePath);
+        if (await file.exists()) {
+          await file.delete();
+          print('Folder file deleted: $folderId.json');
+        }
+      } catch (e) {
+        print('Error deleting folder file $folderId.json: $e');
+      }
+    }
+  }
+
+  // --- Global Methods ---
+
+  // This method replaces the old `deleteAllDecks`
+  Future<void> deleteAllData() async {
+    if (kIsWeb) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_webStorageContainerKey);
+      print('All web storage data deleted.');
+    } else {
+      try {
+        final decksDir = await _getDecksDirectory();
+        if (await decksDir.exists()) {
+          await decksDir.delete(recursive: true);
+          print('All deck files deleted.');
+        }
+        final foldersDir = await _getFoldersDirectory();
+        if (await foldersDir.exists()) {
+          await foldersDir.delete(recursive: true);
+          print('All folder files deleted.');
+        }
+        // Re-create the directories so the app doesn't crash
+        await _getDecksDirectory();
+        await _getFoldersDirectory();
+      } catch (e) {
+        print('Error deleting all data: $e');
+      }
+    }
   }
 }

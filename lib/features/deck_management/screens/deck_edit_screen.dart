@@ -1,5 +1,6 @@
 // lib/features/deck_management/screens/deck_edit_screen.dart
 
+import 'package:ejd_cards/core/models/folder_model.dart';
 import 'package:ejd_cards/core/services/deck_persistence_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,8 +11,13 @@ import '../../../core/models/deck_model.dart';
 
 class DeckEditScreen extends StatefulWidget {
   final DeckModel? initialDeck;
+  final String? initialFolderId; // Optional: To pre-select a folder
 
-  const DeckEditScreen({super.key, this.initialDeck});
+  const DeckEditScreen({
+    super.key,
+    this.initialDeck,
+    this.initialFolderId,
+  });
 
   @override
   State<DeckEditScreen> createState() => _DeckEditScreenState();
@@ -30,6 +36,12 @@ class _DeckEditScreenState extends State<DeckEditScreen> {
   final Uuid _uuid = const Uuid();
   final DeckPersistenceService _persistenceService = DeckPersistenceService();
 
+  // --- New state for folder management ---
+  List<FolderModel> _allFolders = [];
+  String? _selectedFolderId;
+  String? _originalFolderId; // To track if the folder has changed
+  bool _isLoadingFolders = true;
+
   @override
   void initState() {
     super.initState();
@@ -41,6 +53,7 @@ class _DeckEditScreenState extends State<DeckEditScreen> {
       _customBackTimeController = TextEditingController();
       _cards = [];
       _createdAt = DateTime.now();
+      _selectedFolderId = widget.initialFolderId; // Pre-select if provided
     } else {
       _isNewDeck = false;
       _deckId = widget.initialDeck!.id;
@@ -49,15 +62,26 @@ class _DeckEditScreenState extends State<DeckEditScreen> {
       _customFrontTimeController = TextEditingController(text: widget.initialDeck!.customFrontTimeSeconds?.toString() ?? '');
       _customBackTimeController = TextEditingController(text: widget.initialDeck!.customBackTimeSeconds?.toString() ?? '');
       _cards = List<CardModel>.from(widget.initialDeck!.cards.map(
-        (card) => CardModel(
-          id: card.id,
-          frontText: card.frontText,
-          backText: card.backText,
-          explanation: card.explanation,
-          needsReview: card.needsReview,
-        ),
+        (card) => CardModel.fromMap(card.toMap()), // Deep copy
       ));
     }
+    _loadFolders();
+  }
+
+  Future<void> _loadFolders() async {
+    setState(() => _isLoadingFolders = true);
+    _allFolders = await _persistenceService.loadFolders();
+    if (!_isNewDeck) {
+      // Find which folder this deck currently belongs to
+      for (final folder in _allFolders) {
+        if (folder.deckIds.contains(_deckId)) {
+          _selectedFolderId = folder.id;
+          _originalFolderId = folder.id;
+          break;
+        }
+      }
+    }
+    setState(() => _isLoadingFolders = false);
   }
 
   @override
@@ -87,6 +111,25 @@ class _DeckEditScreenState extends State<DeckEditScreen> {
       );
 
       await _persistenceService.saveDeck(updatedDeck);
+
+      // --- Update folder associations ---
+      final bool folderChanged = _selectedFolderId != _originalFolderId;
+      if (folderChanged) {
+        // Remove from the original folder if it existed
+        if (_originalFolderId != null) {
+          final originalFolder = _allFolders.firstWhere((f) => f.id == _originalFolderId);
+          originalFolder.deckIds.remove(_deckId);
+          await _persistenceService.saveFolder(originalFolder);
+        }
+        // Add to the new folder if one was selected
+        if (_selectedFolderId != null) {
+          final newFolder = _allFolders.firstWhere((f) => f.id == _selectedFolderId);
+          if (!newFolder.deckIds.contains(_deckId)) {
+            newFolder.deckIds.add(_deckId);
+            await _persistenceService.saveFolder(newFolder);
+          }
+        }
+      }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -219,93 +262,125 @@ class _DeckEditScreenState extends State<DeckEditScreen> {
           ),
         ],
       ),
-      body: Form(
-        key: _formKey,
-        child: Column(
-          children: [
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    TextFormField(
-                      controller: _titleController,
-                      decoration: const InputDecoration(
-                        labelText: 'Deck Title',
-                        border: OutlineInputBorder(),
-                        hintText: 'Enter a title for your deck',
-                      ),
-                      validator: (value) => (value == null || value.trim().isEmpty) ? 'Deck title cannot be empty.' : null,
-                    ),
-                    const SizedBox(height: 24),
-                    Text('Custom Autoplay Times (Optional)', style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 8),
-                    _buildCustomTimeRow(
-                      label: 'Front Time (sec):',
-                      controller: _customFrontTimeController,
-                      hint: 'Global default',
-                    ),
-                    _buildCustomTimeRow(
-                      label: 'Back Time (sec):',
-                      controller: _customBackTimeController,
-                      hint: 'Global default',
-                    ),
-                    const Divider(height: 32),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      body: _isLoadingFolders
+          ? const Center(child: CircularProgressIndicator())
+          : Form(
+              key: _formKey,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Cards (${_cards.length})', style: Theme.of(context).textTheme.titleMedium),
-                        ElevatedButton.icon(
-                          icon: const Icon(Iconsax.add_square),
-                          label: const Text('Add Card'),
-                          onPressed: () => _addOrEditCard(),
+                        TextFormField(
+                          controller: _titleController,
+                          decoration: const InputDecoration(
+                            labelText: 'Deck Title',
+                            border: OutlineInputBorder(),
+                            hintText: 'Enter a title for your deck',
+                          ),
+                          validator: (value) => (value == null || value.trim().isEmpty) ? 'Deck title cannot be empty.' : null,
+                        ),
+                        const SizedBox(height: 16),
+                        _buildFolderSelector(),
+                        const SizedBox(height: 24),
+                        Text('Custom Autoplay Times (Optional)', style: Theme.of(context).textTheme.titleMedium),
+                        const SizedBox(height: 8),
+                        _buildCustomTimeRow(
+                          label: 'Front Time (sec):',
+                          controller: _customFrontTimeController,
+                          hint: 'Global default',
+                        ),
+                        _buildCustomTimeRow(
+                          label: 'Back Time (sec):',
+                          controller: _customBackTimeController,
+                          hint: 'Global default',
+                        ),
+                        const Divider(height: 32),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text('Cards (${_cards.length})', style: Theme.of(context).textTheme.titleMedium),
+                            ElevatedButton.icon(
+                              icon: const Icon(Iconsax.add_square),
+                              label: const Text('Add Card'),
+                              onPressed: () => _addOrEditCard(),
+                            ),
+                          ],
                         ),
                       ],
                     ),
-                  ],
-                ),
+                  ),
+                  Expanded(
+                    child: _cards.isEmpty
+                        ? const Center(child: Text('No cards in this deck yet. Add one!'))
+                        : ListView.builder(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            itemCount: _cards.length,
+                            itemBuilder: (context, index) {
+                              final card = _cards[index];
+                              return Card(
+                                margin: const EdgeInsets.symmetric(vertical: 4.0),
+                                child: ListTile(
+                                  leading: card.needsReview ? Tooltip(
+                                          message: 'Marked for review',
+                                          child: Icon(Iconsax.bookmark, color: Colors.orange[600]),
+                                        ) : null,
+                                  title: Text(card.frontText, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  subtitle: Text(card.backText, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        icon: const Icon(Iconsax.edit),
+                                        onPressed: () => _addOrEditCard(existingCard: card, cardIndex: index),
+                                      ),
+                                      IconButton(
+                                        icon: const Icon(Iconsax.trash, color: Colors.redAccent),
+                                        onPressed: () => _deleteCard(index),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
               ),
             ),
-            Expanded(
-              flex: 2,
-              child: _cards.isEmpty
-                  ? const Center(child: Text('No cards in this deck yet. Add one!'))
-                  : ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      itemCount: _cards.length,
-                      itemBuilder: (context, index) {
-                        final card = _cards[index];
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 4.0),
-                          child: ListTile(
-                            leading: card.needsReview ? Tooltip(
-                                    message: 'Marked for review',
-                                    child: Icon(Iconsax.bookmark, color: Colors.orange[600]),
-                                  ) : null,
-                            title: Text(card.frontText, maxLines: 1, overflow: TextOverflow.ellipsis),
-                            subtitle: Text(card.backText, maxLines: 1, overflow: TextOverflow.ellipsis),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Iconsax.edit),
-                                  onPressed: () => _addOrEditCard(existingCard: card, cardIndex: index),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Iconsax.trash, color: Colors.redAccent),
-                                  onPressed: () => _deleteCard(index),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
+    );
+  }
+
+  Widget _buildFolderSelector() {
+    return DropdownButtonFormField<String>(
+      value: _selectedFolderId,
+      decoration: const InputDecoration(
+        labelText: 'Folder',
+        border: OutlineInputBorder(),
+        prefixIcon: Icon(Iconsax.folder_2),
       ),
+      hint: const Text('Select a folder (optional)'),
+      isExpanded: true,
+      items: [
+        // Add a "None" option to allow un-assigning a deck
+        const DropdownMenuItem<String>(
+          value: null,
+          child: Text('None (Uncategorized)'),
+        ),
+        ..._allFolders.map((FolderModel folder) {
+          return DropdownMenuItem<String>(
+            value: folder.id,
+            child: Text(folder.title),
+          );
+        }).toList(),
+      ],
+      onChanged: (String? newValue) {
+        setState(() {
+          _selectedFolderId = newValue;
+        });
+      },
     );
   }
 

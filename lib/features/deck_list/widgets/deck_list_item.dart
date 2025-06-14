@@ -11,6 +11,7 @@ class DeckListItem extends StatelessWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final VoidCallback onExport;
+  final VoidCallback onReview;
 
   const DeckListItem({
     super.key,
@@ -20,6 +21,7 @@ class DeckListItem extends StatelessWidget {
     required this.onEdit,
     required this.onDelete,
     required this.onExport,
+    required this.onReview,
   });
 
   @override
@@ -67,14 +69,19 @@ class DeckListItem extends StatelessWidget {
                 PopupMenuButton<String>(
                   icon: Icon(Iconsax.more, color: colorScheme.onSurfaceVariant),
                   onSelected: (value) {
+                    if (value == 'review') onReview();
                     if (value == 'edit') onEdit();
                     if (value == 'export') onExport();
                     if (value == 'delete') onDelete();
                   },
                   itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
                     const PopupMenuItem<String>(
+                      value: 'review',
+                      child: ListTile(leading: Icon(Iconsax.document_text), title: Text('Review & Edit Cards')),
+                    ),
+                    const PopupMenuItem<String>(
                       value: 'edit',
-                      child: ListTile(leading: Icon(Iconsax.edit), title: Text('Edit')),
+                      child: ListTile(leading: Icon(Iconsax.edit), title: Text('Edit Deck Settings')),
                     ),
                     const PopupMenuItem<String>(
                       value: 'export',
@@ -131,7 +138,7 @@ class DeckListItem extends StatelessWidget {
                     foregroundColor: colorScheme.onPrimary,
                   ),
 
-                  child: Icon(Iconsax.play, size: 28),
+                  child: const Icon(Iconsax.play, size: 28),
                 ),
               ],
             ),

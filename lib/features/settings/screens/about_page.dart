@@ -37,14 +37,14 @@ class _AboutPageState extends State<AboutPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Reset All App Data?'),
-        content: const Text('This action is irreversible. All your decks and settings will be permanently deleted.'),
+        content: const Text('This action is irreversible. All your decks, folders, and settings will be permanently deleted.'),
         actions: [
           TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
           TextButton(
             style: TextButton.styleFrom(foregroundColor: Colors.red),
             onPressed: () async {
-              // Perform the reset
-              await DeckPersistenceService().deleteAllDecks();
+              // Perform the reset using the new global data deletion method
+              await DeckPersistenceService().deleteAllData();
 
               final settings = SettingsService();
               await settings.setThemeMode(AppThemeMode.system);
@@ -91,7 +91,7 @@ class _AboutPageState extends State<AboutPage> {
           const Divider(),
           const ListTile(
             leading: Icon(Iconsax.code),
-            title: Text('Framework'),
+            title: const Text('Framework'),
             subtitle: Text('Built with Flutter'),
           ),
           const Divider(),

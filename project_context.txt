@@ -1,6 +1,6 @@
 --- Project Context for ejd_cards ---
---- Generated on: 2025-06-13T09:13:57.291332 ---
---- Root Directory: C:\Users\user\Documents\FlutterProjects\ejd_cards ---
+--- Generated on: 2025-06-15T00:30:37.585056 ---
+--- Root Directory: c:\Users\user\Documents\FlutterProjects\ejd_cards ---
 
 
 --- START FILE: .gitignore ---
@@ -349,13 +349,20 @@ class DeckModel {
 
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb; // Important for checking platform
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/deck_model.dart';
 
 class DeckPersistenceService {
+  // --- For Web ---
+  static const String _webStorageKey = 'all_decks_storage';
+
+  // --- For Mobile/Desktop ---
   static const String _decksFolderName = "flashcard_decks";
 
   // Gets the directory where decks are stored, creating it if it doesn't exist.
+  // This method is ONLY for non-web platforms.
   Future<Directory> _getDecksDirectory() async {
     final appDocDir = await getApplicationDocumentsDirectory();
     final decksDir = Directory('${appDocDir.path}/$_decksFolderName');
@@ -371,73 +378,126 @@ class DeckPersistenceService {
     return '${dir.path}/$deckId.json';
   }
 
-  // Saves a single deck to a JSON file.
+  // --- Platform-Aware Methods ---
+
   Future<void> saveDeck(DeckModel deck) async {
-    try {
-      final filePath = await _getFilePath(deck.id);
-      final file = File(filePath);
-      // Use a pretty-printed JSON for easier debugging if needed
-      final jsonString = const JsonEncoder.withIndent('  ').convert(deck.toMap());
-      await file.writeAsString(jsonString);
-      print('Deck saved: ${deck.title} to $filePath');
-    } catch (e) {
-      print('Error saving deck ${deck.id}: $e');
+    if (kIsWeb) {
+      // WEB: Load all decks, add/update this one, save all back.
+      final decks = await loadDecks();
+      final index = decks.indexWhere((d) => d.id == deck.id);
+      if (index != -1) {
+        decks[index] = deck; // Update existing
+      } else {
+        decks.add(deck); // Add new
+      }
+      await _saveAllDecksForWeb(decks);
+    } else {
+      // MOBILE/DESKTOP: Save to individual file.
+      try {
+        final filePath = await _getFilePath(deck.id);
+        final file = File(filePath);
+        final jsonString = const JsonEncoder.withIndent('  ').convert(deck.toMap());
+        await file.writeAsString(jsonString);
+        print('Deck saved: ${deck.title} to $filePath');
+      } catch (e) {
+        print('Error saving deck ${deck.id}: $e');
+      }
     }
   }
 
-  // Loads all decks from their respective JSON files.
   Future<List<DeckModel>> loadDecks() async {
-    try {
-      final dir = await _getDecksDirectory();
-      final List<DeckModel> decks = [];
-      final List<FileSystemEntity> entities = await dir.list().toList();
+    if (kIsWeb) {
+      // WEB: Load the single JSON string from shared_preferences.
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final String? allDecksJson = prefs.getString(_webStorageKey);
+        if (allDecksJson == null) {
+          return [];
+        }
+        final List<dynamic> deckList = jsonDecode(allDecksJson);
+        final decks = deckList.map((map) => DeckModel.fromMap(map)).toList();
+        print('Loaded ${decks.length} decks from web storage.');
+        return decks;
+      } catch (e) {
+        print('Error loading decks from web storage: $e');
+        return [];
+      }
+    } else {
+      // MOBILE/DESKTOP: Load all individual files.
+      try {
+        final dir = await _getDecksDirectory();
+        final List<DeckModel> decks = [];
+        final List<FileSystemEntity> entities = await dir.list().toList();
 
-      for (FileSystemEntity entity in entities) {
-        if (entity is File && entity.path.endsWith('.json')) {
-          try {
-            final jsonString = await entity.readAsString();
-            final Map<String, dynamic> jsonMap = jsonDecode(jsonString);
-            decks.add(DeckModel.fromMap(jsonMap));
-          } catch (e) {
-            print('Error reading or parsing deck file ${entity.path}: $e');
-            // Optionally, delete or move corrupted files
+        for (FileSystemEntity entity in entities) {
+          if (entity is File && entity.path.endsWith('.json')) {
+            try {
+              final jsonString = await entity.readAsString();
+              final Map<String, dynamic> jsonMap = jsonDecode(jsonString);
+              decks.add(DeckModel.fromMap(jsonMap));
+            } catch (e) {
+              print('Error reading or parsing deck file ${entity.path}: $e');
+            }
           }
         }
+        print('Loaded ${decks.length} decks from file system.');
+        return decks;
+      } catch (e) {
+        print('Error loading decks directory: $e');
+        return [];
       }
-      print('Loaded ${decks.length} decks from persistence.');
-      return decks;
-    } catch (e) {
-      print('Error loading decks directory: $e');
-      return []; // Return empty list on error
     }
   }
 
-  // Deletes the JSON file for a specific deck.
   Future<void> deleteDeck(String deckId) async {
-    try {
-      final filePath = await _getFilePath(deckId);
-      final file = File(filePath);
-      if (await file.exists()) {
-        await file.delete();
-        print('Deck file deleted: $deckId.json');
+    if (kIsWeb) {
+      // WEB: Load all, remove one, save all back.
+      final decks = await loadDecks();
+      decks.removeWhere((deck) => deck.id == deckId);
+      await _saveAllDecksForWeb(decks);
+    } else {
+      // MOBILE/DESKTOP: Delete the individual file.
+      try {
+        final filePath = await _getFilePath(deckId);
+        final file = File(filePath);
+        if (await file.exists()) {
+          await file.delete();
+          print('Deck file deleted: $deckId.json');
+        }
+      } catch (e) {
+        print('Error deleting deck file $deckId.json: $e');
       }
-    } catch (e) {
-      print('Error deleting deck file $deckId.json: $e');
     }
   }
 
-  // Deletes the entire decks folder. Used for the "Reset App Data" feature.
   Future<void> deleteAllDecks() async {
-    try {
-      final dir = await _getDecksDirectory();
-      if (await dir.exists()) {
-        await dir.delete(recursive: true);
-        print('All deck files deleted.');
-        await _getDecksDirectory(); // Recreate the empty directory for future use
+    if (kIsWeb) {
+      // WEB: Just remove the key from shared_preferences.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_webStorageKey);
+      print('All web storage decks deleted.');
+    } else {
+      // MOBILE/DESKTOP: Delete the whole directory.
+      try {
+        final dir = await _getDecksDirectory();
+        if (await dir.exists()) {
+          await dir.delete(recursive: true);
+          print('All deck files deleted.');
+          await _getDecksDirectory();
+        }
+      } catch (e) {
+        print('Error deleting all decks: $e');
       }
-    } catch (e) {
-      print('Error deleting all decks: $e');
     }
+  }
+
+  // Helper method specifically for saving all decks on the web
+  Future<void> _saveAllDecksForWeb(List<DeckModel> decks) async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<Map<String, dynamic>> deckListMap = decks.map((deck) => deck.toMap()).toList();
+    final allDecksJson = jsonEncode(deckListMap);
+    await prefs.setString(_webStorageKey, allDecksJson);
+    print('Saved ${decks.length} decks to web storage.');
   }
 }
 --- END FILE: lib\core\services\deck_persistence_service.dart ---
@@ -446,12 +506,12 @@ class DeckPersistenceService {
 --- START FILE: lib\core\services\settings_service.dart ---
 // lib/core/services/settings_service.dart
 
-import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../main.dart'; // Import to get the AppThemeMode enum
 
 class SettingsService {
   // Define keys for shared_preferences
-  static const String _keyThemeMode = 'themeMode';
+  static const String _keyThemeMode = 'appThemeMode'; // Using a more specific key
   static const String _keyDefaultFrontTime = 'defaultFrontTime';
   static const String _keyDefaultBackTime = 'defaultBackTime';
   static const String _keyAutoplayShuffle = 'autoplayShuffle';
@@ -469,17 +529,18 @@ class SettingsService {
   }
 
   // --- Theme Mode ---
-  Future<void> setThemeMode(ThemeMode mode) async {
+  Future<void> setThemeMode(AppThemeMode mode) async {
     final prefs = await _getPrefs();
     await prefs.setString(_keyThemeMode, mode.name);
   }
 
-  Future<ThemeMode> getThemeMode() async {
+  Future<AppThemeMode> getThemeMode() async {
     final prefs = await _getPrefs();
     final themeString = prefs.getString(_keyThemeMode);
-    return ThemeMode.values.firstWhere(
+    // Find the AppThemeMode that matches the stored string, or default to system
+    return AppThemeMode.values.firstWhere(
       (e) => e.name == themeString,
-      orElse: () => ThemeMode.system, // Default to system if not found
+      orElse: () => AppThemeMode.system,
     );
   }
 
@@ -528,6 +589,72 @@ class SettingsService {
   }
 }
 --- END FILE: lib\core\services\settings_service.dart ---
+
+
+--- START FILE: lib\core\theme\app_theme.dart ---
+// lib/core/theme/app_theme.dart
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+
+class AppTheme {
+  static final _baseTextTheme = GoogleFonts.poppinsTextTheme(const TextTheme()).copyWith(
+    displaySmall: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+    headlineMedium: GoogleFonts.poppins(fontWeight: FontWeight.w600),
+    titleLarge: GoogleFonts.poppins(fontWeight: FontWeight.bold),
+  );
+
+  static final lightTheme = ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.light,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFF6A5AE0),
+      brightness: Brightness.light,
+      primary: const Color(0xFF6A5AE0),
+      surface: const Color(0xFFFFFFFF),
+      background: const Color(0xFFF6F6F9),
+    ),
+    textTheme: _baseTextTheme.apply(
+      bodyColor: Colors.black87,
+      displayColor: Colors.black,
+    ),
+    scaffoldBackgroundColor: const Color(0xFFF6F6F9),
+  );
+
+  static final darkTheme = ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.dark,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFF7B61FF),
+      brightness: Brightness.dark,
+      primary: const Color(0xFF7B61FF),
+      surface: const Color(0xFF2D2D3A), // Dark Grey Card background
+      background: const Color(0xFF1F1F29), // Dark Grey App background
+    ),
+    textTheme: _baseTextTheme.apply(
+      bodyColor: Colors.white70,
+      displayColor: Colors.white,
+    ),
+    scaffoldBackgroundColor: const Color(0xFF1F1F29),
+  );
+
+  static final amoledTheme = ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.dark,
+    colorScheme: ColorScheme.fromSeed(
+      seedColor: const Color(0xFF7B61FF),
+      brightness: Brightness.dark,
+      primary: const Color(0xFF7B61FF),
+      surface: const Color(0xFF121212), // Slightly off-black for cards
+      background: const Color(0xFF000000), // True black for background
+    ),
+    textTheme: _baseTextTheme.apply(
+      bodyColor: Colors.white70,
+      displayColor: Colors.white,
+    ),
+    scaffoldBackgroundColor: const Color(0xFF000000),
+  );
+}
+--- END FILE: lib\core\theme\app_theme.dart ---
 
 
 --- START FILE: lib\core\widgets\flip_card_widget.dart ---
@@ -783,34 +910,7 @@ class _DeckListScreenState extends State<DeckListScreen> {
 
       if (result != null && result.files.single.bytes != null) {
         Uint8List fileBytes = result.files.single.bytes!;
-        ParseResult parseResult = await _importerService.importDeckFromFile(fileBytes);
-
-        if (mounted) {
-          if (parseResult.hasError) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Import Error: ${parseResult.error}'),
-                backgroundColor: Colors.redAccent,
-              ),
-            );
-          } else if (parseResult.deck != null) {
-            bool deckExists = _decks.any((deck) => deck.title.toLowerCase() == parseResult.deck!.title.toLowerCase());
-            if (deckExists) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('A deck with the title "${parseResult.deck!.title}" already exists.')),
-              );
-            } else {
-              await _persistenceService.saveDeck(parseResult.deck!);
-              _loadPersistedDecks(); // Reload from storage to ensure consistency
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Deck "${parseResult.deck!.title}" imported successfully!'),
-                  backgroundColor: Colors.green,
-                ),
-              );
-            }
-          }
-        }
+        _processImport(await _importerService.importDeckFromFile(fileBytes));
       }
     } catch (e) {
       if (mounted) {
@@ -818,12 +918,85 @@ class _DeckListScreenState extends State<DeckListScreen> {
           SnackBar(content: Text('File picking failed: ${e.toString()}')),
         );
       }
-      print("File picking error: $e");
     } finally {
       if (mounted) {
         setState(() {
           _isImporting = false;
         });
+      }
+    }
+  }
+
+  void _showImportFromTextDialog() {
+    final textController = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Import from Text'),
+          content: Form(
+            key: formKey,
+            child: TextFormField(
+              controller: textController,
+              maxLines: 10,
+              decoration: const InputDecoration(
+                labelText: 'Paste JSON here',
+                hintText: 'Paste the JSON content from your LLM...',
+                border: OutlineInputBorder(),
+              ),
+              validator: (value) => (value == null || value.trim().isEmpty) ? 'Pasted text cannot be empty.' : null,
+            ),
+          ),
+          actions: [
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            ElevatedButton(
+              child: const Text('Import'),
+              onPressed: () async {
+                if (formKey.currentState!.validate()) {
+                  final pastedText = textController.text;
+                  Navigator.of(context).pop();
+                  _processImport(await _importerService.importDeckFromString(pastedText));
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _processImport(ParseResult parseResult) async {
+    if (!mounted) return;
+
+    if (parseResult.hasError) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Import Error: ${parseResult.error}'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    } else if (parseResult.deck != null) {
+      bool deckExists = _decks.any((deck) => deck.title.toLowerCase() == parseResult.deck!.title.toLowerCase());
+      if (deckExists) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('A deck with the title "${parseResult.deck!.title}" already exists.')),
+        );
+      } else {
+        await _persistenceService.saveDeck(parseResult.deck!);
+        await _loadPersistedDecks(); // Reload from storage to ensure consistency and trigger animation
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Deck "${parseResult.deck!.title}" imported successfully!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
       }
     }
   }
@@ -901,12 +1074,13 @@ class _DeckListScreenState extends State<DeckListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text('My Decks'),
         centerTitle: true,
         elevation: 0,
-        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        backgroundColor: theme.scaffoldBackgroundColor,
         actions: [
           IconButton(
             icon: const Icon(Iconsax.setting_2),
@@ -945,6 +1119,8 @@ class _DeckListScreenState extends State<DeckListScreen> {
             }
           } else if (value == 'import_file') {
             _pickAndImportDeck();
+          } else if (value == 'import_text') {
+            _showImportFromTextDialog();
           }
         },
         itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
@@ -959,18 +1135,25 @@ class _DeckListScreenState extends State<DeckListScreen> {
             value: 'import_file',
             child: ListTile(
               leading: Icon(Iconsax.document_upload),
-              title: Text('Import from JSON'),
+              title: Text('Import from File'),
+            ),
+          ),
+          const PopupMenuItem<String>(
+            value: 'import_text',
+            child: ListTile(
+              leading: Icon(Iconsax.document_text),
+              title: Text('Paste from Text'),
             ),
           ),
         ],
         child: Container(
           padding: const EdgeInsets.all(16.0),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary,
+            color: theme.colorScheme.primary,
             shape: BoxShape.circle,
             boxShadow: [
               BoxShadow(
-                color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                color: theme.colorScheme.primary.withAlpha(77), // 30% of 255 is ~77
                 blurRadius: 8.0,
                 offset: const Offset(0, 4),
               ),
@@ -995,7 +1178,7 @@ class _DeckListScreenState extends State<DeckListScreen> {
               Text('Your Bookshelf is Empty', style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 12.0),
               Text(
-                'Tap the "+" button to create a new deck or import one from a file.',
+                'Tap the "+" button to create a new deck or import one.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.grey[600]),
               ),
@@ -1005,35 +1188,35 @@ class _DeckListScreenState extends State<DeckListScreen> {
       );
     }
 
-  return ListView.builder(
-    padding: const EdgeInsets.only(bottom: 80), // Padding to avoid FAB overlap
-    itemCount: _decks.length,
-    itemBuilder: (context, index) {
-      final deck = _decks[index];
-      return DeckListItem(
-        deck: deck,
-        onStudy: () => _handleManualStudyStart(deck),
-        onPlay: () => _handleAutoplayStart(deck),
-        onEdit: () => _handleDeckEdit(deck),
-        onDelete: () => _showDeleteConfirmationDialog(deck),
-        onExport: () => _handleDeckExport(deck),
-      )
-          .animate()
-          .fadeIn(
-            duration: 400.ms,
-            curve: Curves.easeOut,
-            delay: (index * 100).ms,
-          )
-          .slideY(
-            begin: 0.2,
-            end: 0,
-            duration: 400.ms,
-            curve: Curves.easeOut,
-            delay: (index * 100).ms,
-          );
-    },
-  );
-}
+   return ListView.builder(
+  padding: const EdgeInsets.only(bottom: 80),
+  itemCount: _decks.length,
+  itemBuilder: (context, index) {
+    final deck = _decks[index];
+    return DeckListItem(
+      deck: deck,
+      onStudy: () => _handleManualStudyStart(deck),
+      onPlay: () => _handleAutoplayStart(deck),
+      onEdit: () => _handleDeckEdit(deck),
+      onDelete: () => _showDeleteConfirmationDialog(deck),
+      onExport: () => _handleDeckExport(deck),
+    )
+        .animate()
+        .fadeIn(
+          duration: 400.ms,
+          curve: Curves.easeOut,
+          delay: (index * 75).ms, // Apply a staggered delay to each item
+        )
+        .slideY(
+          begin: 0.2,
+          end: 0,
+          duration: 400.ms,
+          curve: Curves.easeOut,
+          delay: (index * 75).ms, // Apply the same delay
+        );
+  },
+);
+  }
 }
 --- END FILE: lib\features\deck_list\screens\deck_list_screen.dart ---
 
@@ -1411,52 +1594,51 @@ class _DeckEditScreenState extends State<DeckEditScreen> {
         key: _formKey,
         child: Column(
           children: [
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    TextFormField(
-                      controller: _titleController,
-                      decoration: const InputDecoration(
-                        labelText: 'Deck Title',
-                        border: OutlineInputBorder(),
-                        hintText: 'Enter a title for your deck',
+            // --- TOP NON-SCROLLING SECTION ---
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextFormField(
+                    controller: _titleController,
+                    decoration: const InputDecoration(
+                      labelText: 'Deck Title',
+                      border: OutlineInputBorder(),
+                      hintText: 'Enter a title for your deck',
+                    ),
+                    validator: (value) => (value == null || value.trim().isEmpty) ? 'Deck title cannot be empty.' : null,
+                  ),
+                  const SizedBox(height: 24),
+                  Text('Custom Autoplay Times (Optional)', style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 8),
+                  _buildCustomTimeRow(
+                    label: 'Front Time (sec):',
+                    controller: _customFrontTimeController,
+                    hint: 'Global default',
+                  ),
+                  _buildCustomTimeRow(
+                    label: 'Back Time (sec):',
+                    controller: _customBackTimeController,
+                    hint: 'Global default',
+                  ),
+                  const Divider(height: 32),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Cards (${_cards.length})', style: Theme.of(context).textTheme.titleMedium),
+                      ElevatedButton.icon(
+                        icon: const Icon(Iconsax.add_square),
+                        label: const Text('Add Card'),
+                        onPressed: () => _addOrEditCard(),
                       ),
-                      validator: (value) => (value == null || value.trim().isEmpty) ? 'Deck title cannot be empty.' : null,
-                    ),
-                    const SizedBox(height: 24),
-                    Text('Custom Autoplay Times (Optional)', style: Theme.of(context).textTheme.titleMedium),
-                    const SizedBox(height: 8),
-                    _buildCustomTimeRow(
-                      label: 'Front Time (sec):',
-                      controller: _customFrontTimeController,
-                      hint: 'Global default',
-                    ),
-                    _buildCustomTimeRow(
-                      label: 'Back Time (sec):',
-                      controller: _customBackTimeController,
-                      hint: 'Global default',
-                    ),
-                    const Divider(height: 32),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text('Cards (${_cards.length})', style: Theme.of(context).textTheme.titleMedium),
-                        ElevatedButton.icon(
-                          icon: const Icon(Iconsax.add_square),
-                          label: const Text('Add Card'),
-                          onPressed: () => _addOrEditCard(),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
+                ],
               ),
             ),
+            // --- SCROLLING CARD LIST ---
             Expanded(
-              flex: 2,
               child: _cards.isEmpty
                   ? const Center(child: Text('No cards in this deck yet. Add one!'))
                   : ListView.builder(
@@ -1646,6 +1828,19 @@ class DeckImporterService {
       return ParseResult(error: "Failed to parse JSON file. Error: ${e.toString()}");
     }
   }
+
+  // New method to handle a raw string
+  Future<ParseResult> importDeckFromString(String jsonString) async {
+    try {
+      // Convert the string to bytes and call the existing method
+      final bytes = Uint8List.fromList(utf8.encode(jsonString));
+      return await importDeckFromFile(bytes);
+    } catch (e) {
+      return ParseResult(error: "Invalid text format. Error: ${e.toString()}");
+    }
+  }
+
+  
 }
 
 class ParseResult {
@@ -1667,7 +1862,7 @@ import 'package:iconsax_flutter/iconsax_flutter.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../../../core/services/deck_persistence_service.dart';
 import '../../../core/services/settings_service.dart';
-import '../../../main.dart'; // To reset themeNotifier
+import '../../../main.dart'; // To reset themeNotifier and get AppThemeMode
 
 class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
@@ -1709,14 +1904,14 @@ class _AboutPageState extends State<AboutPage> {
               await DeckPersistenceService().deleteAllDecks();
 
               final settings = SettingsService();
-              await settings.setThemeMode(ThemeMode.system);
+              await settings.setThemeMode(AppThemeMode.system);
               await settings.setDefaultFrontTime(SettingsService.defaultFrontSeconds);
               await settings.setDefaultBackTime(SettingsService.defaultBackSeconds);
               await settings.setAutoplayShuffle(SettingsService.defaultShuffle);
               await settings.setAutoplayLoop(SettingsService.defaultLoop);
 
               // Update the global notifier to reflect the theme reset instantly
-              themeNotifier.value = ThemeMode.system;
+              themeNotifier.value = AppThemeMode.system;
 
               // Close the dialog
               if (mounted) Navigator.of(ctx).pop();
@@ -1725,7 +1920,7 @@ class _AboutPageState extends State<AboutPage> {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text('App data has been reset.')),
                 );
-                // Pop back two screens to get to the deck list, forcing a refresh
+                // Pop all the way back to the deck list, which will then be forced to refresh
                 Navigator.of(context).popUntil((route) => route.isFirst);
               }
             },
@@ -1785,7 +1980,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:iconsax_flutter/iconsax_flutter.dart';
 import '../../../core/services/settings_service.dart';
-import '../../../main.dart'; // To access the global themeNotifier
+import '../../../main.dart'; // To access AppThemeMode and themeNotifier
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -1854,7 +2049,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Invalid time. Please enter a positive number.')),
       );
-      _frontTimeController.text = _defaultFrontTime.toString(); // Revert to old value
+      _frontTimeController.text = _defaultFrontTime.toString();
     }
   }
 
@@ -1874,7 +2069,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Invalid time. Please enter a positive number.')),
       );
-      _backTimeController.text = _defaultBackTime.toString(); // Revert to old value
+      _backTimeController.text = _defaultBackTime.toString();
     }
   }
 
@@ -1896,11 +2091,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _changeTheme(ThemeMode? newMode) async {
+  Future<void> _changeTheme(AppThemeMode? newMode) async {
     if (newMode == null) return;
-    // Update the global notifier, which will rebuild the UI across the app
     themeNotifier.value = newMode;
-    // Persist the new choice for the next app launch
     await _settingsService.setThemeMode(newMode);
   }
 
@@ -1925,12 +2118,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             contentPadding: const EdgeInsets.symmetric(horizontal: 4),
             leading: const Icon(Iconsax.brush_1),
             title: const Text('Theme'),
-            trailing: DropdownButton<ThemeMode>(
+            trailing: DropdownButton<AppThemeMode>(
               value: themeNotifier.value,
               items: const [
-                DropdownMenuItem(value: ThemeMode.system, child: Text('System Default')),
-                DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
-                DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+                DropdownMenuItem(value: AppThemeMode.system, child: Text('System Default')),
+                DropdownMenuItem(value: AppThemeMode.light, child: Text('Light')),
+                DropdownMenuItem(value: AppThemeMode.dark, child: Text('Dark (Grey)')),
+                DropdownMenuItem(value: AppThemeMode.amoled, child: Text('Dark (AMOLED)')),
               ],
               onChanged: _changeTheme,
             ),
@@ -1996,6 +2190,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             textAlign: TextAlign.center,
             decoration: const InputDecoration(border: OutlineInputBorder()),
+            validator: (value) {
+              if (value == null || value.trim().isEmpty) return null;
+              final num = int.tryParse(value.trim());
+              if (num == null || num <= 0) return 'Must be >0';
+              return null;
+            },
           ),
         ),
         const SizedBox(width: 10),
@@ -2042,15 +2242,14 @@ class AutoplayScreen extends StatefulWidget {
   State<AutoplayScreen> createState() => _AutoplayScreenState();
 }
 
-class _AutoplayScreenState extends State<AutoplayScreen> {
+class _AutoplayScreenState extends State<AutoplayScreen> with SingleTickerProviderStateMixin {
   int _currentIndex = 0;
   bool _showFront = true;
   AutoplayStatus _status = AutoplayStatus.stopped;
-  Timer? _cardTimer;
   Timer? _transitionDelayTimer;
 
-  int _currentTimerDuration = 0;
-  int _timeRemaining = 0;
+  // New AnimationController for smooth progress bar
+  late AnimationController _progressController;
 
   final SettingsService _settingsService = SettingsService();
   final DeckPersistenceService _persistenceService = DeckPersistenceService();
@@ -2068,33 +2267,28 @@ class _AutoplayScreenState extends State<AutoplayScreen> {
   @override
   void initState() {
     super.initState();
+    _progressController = AnimationController(vsync: this)..addListener(() => setState(() {}));
     WakelockPlus.enable();
-    print("Wakelock enabled for AutoplayScreen.");
     _loadSettingsAndPrepareDeck();
   }
 
   Future<void> _loadSettingsAndPrepareDeck() async {
+    // ... (This method remains the same as the last version)
     if (!mounted) return;
-    setState(() {
-      _isLoadingSettings = true;
-    });
+    setState(() => _isLoadingSettings = true);
 
     _globalFrontTime = await _settingsService.getDefaultFrontTime();
     _globalBackTime = await _settingsService.getDefaultBackTime();
     _shouldShuffle = await _settingsService.getAutoplayShuffle();
     _shouldLoop = await _settingsService.getAutoplayLoop();
 
-    if (widget.startIndex > 0) {
-      _shouldShuffle = false;
-    }
+    if (widget.startIndex > 0) _shouldShuffle = false;
 
     _preparePlayList();
     _currentIndex = (widget.startIndex < _currentPlayList.length) ? widget.startIndex : 0;
 
     if (mounted) {
-      setState(() {
-        _isLoadingSettings = false;
-      });
+      setState(() => _isLoadingSettings = false);
       if (_currentPlayList.isNotEmpty) {
         _status = AutoplayStatus.playing;
         _startCardCycle();
@@ -2115,8 +2309,7 @@ class _AutoplayScreenState extends State<AutoplayScreen> {
   @override
   void dispose() {
     WakelockPlus.disable();
-    print("Wakelock disabled for AutoplayScreen.");
-    _cardTimer?.cancel();
+    _progressController.dispose();
     _transitionDelayTimer?.cancel();
     super.dispose();
   }
@@ -2127,54 +2320,26 @@ class _AutoplayScreenState extends State<AutoplayScreen> {
 
   void _startCardCycle() {
     if (_status != AutoplayStatus.playing || _currentCard == null) return;
-    _cardTimer?.cancel();
     _transitionDelayTimer?.cancel();
     _flipCardController.reset();
 
     if (!mounted) return;
-    setState(() {
-      _showFront = true;
-      _currentTimerDuration = _frontDuration;
-      _timeRemaining = _frontDuration;
-    });
+    setState(() => _showFront = true);
 
-    _cardTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted || _status != AutoplayStatus.playing) {
-        timer.cancel();
-        return;
-      }
-      setState(() {
-        _timeRemaining--;
-      });
-      if (_timeRemaining <= 0) {
-        timer.cancel();
-        _showBackSide();
-      }
+    _progressController.duration = Duration(seconds: _frontDuration);
+    _progressController.forward(from: 0.0).whenComplete(() {
+      if (_status == AutoplayStatus.playing) _showBackSide();
     });
   }
 
   void _showBackSide() {
     if (!mounted || _status != AutoplayStatus.playing || _currentCard == null) return;
-    _cardTimer?.cancel();
-    _transitionDelayTimer?.cancel();
     _flipCardController.flip();
+    setState(() => _showFront = false);
 
-    setState(() {
-      _showFront = false;
-      _currentTimerDuration = _backDuration;
-      _timeRemaining = _backDuration;
-    });
-
-    _cardTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted || _status != AutoplayStatus.playing) {
-        timer.cancel();
-        return;
-      }
-      setState(() {
-        _timeRemaining--;
-      });
-      if (_timeRemaining <= 0) {
-        timer.cancel();
+    _progressController.duration = Duration(seconds: _backDuration);
+    _progressController.forward(from: 0.0).whenComplete(() {
+      if (_status == AutoplayStatus.playing) {
         _transitionDelayTimer = Timer(const Duration(milliseconds: 500), _moveToNextCard);
       }
     });
@@ -2183,28 +2348,16 @@ class _AutoplayScreenState extends State<AutoplayScreen> {
   void _moveToNextCard() {
     if (!mounted || _status != AutoplayStatus.playing) return;
     if (_currentIndex < _currentPlayList.length - 1) {
-      setState(() {
-        _currentIndex++;
-      });
+      setState(() => _currentIndex++);
       _startCardCycle();
     } else {
       if (_shouldLoop) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Looping deck...")));
         _preparePlayList();
-        if (_currentPlayList.isNotEmpty) {
-          _startCardCycle();
-        } else {
-          if (mounted) setState(() => _status = AutoplayStatus.finished);
-        }
+        if (_currentPlayList.isNotEmpty) _startCardCycle();
+        else if (mounted) setState(() => _status = AutoplayStatus.finished);
       } else {
-        if (mounted) {
-          setState(() {
-            _status = AutoplayStatus.finished;
-            _currentTimerDuration = 0;
-            _timeRemaining = 0;
-          });
-        }
-        _cardTimer?.cancel();
+        if (mounted) setState(() => _status = AutoplayStatus.finished);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Autoplay finished: End of deck reached.")));
       }
     }
@@ -2214,19 +2367,14 @@ class _AutoplayScreenState extends State<AutoplayScreen> {
     if (_isLoadingSettings) return;
     if (_status == AutoplayStatus.playing) {
       setState(() => _status = AutoplayStatus.paused);
-      _cardTimer?.cancel();
-      _transitionDelayTimer?.cancel();
+      _progressController.stop();
     } else if (_status == AutoplayStatus.paused) {
       setState(() => _status = AutoplayStatus.playing);
-      if (_currentCard != null) {
-        if (_showFront) _startCardCycle(); else _showBackSide();
-      }
+      _progressController.forward();
     } else if (_status == AutoplayStatus.finished && _currentPlayList.isNotEmpty) {
       _preparePlayList();
       setState(() => _status = AutoplayStatus.playing);
       _startCardCycle();
-    } else if (_currentPlayList.isEmpty && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("No cards to play.")));
     }
   }
 
@@ -2238,7 +2386,7 @@ class _AutoplayScreenState extends State<AutoplayScreen> {
     await _persistenceService.saveDeck(widget.deck);
 
     if (mounted) setState(() => _status = AutoplayStatus.stopped);
-    _cardTimer?.cancel();
+    _progressController.stop();
     _transitionDelayTimer?.cancel();
     if (mounted) Navigator.of(context).pop(true);
   }
@@ -2248,7 +2396,7 @@ class _AutoplayScreenState extends State<AutoplayScreen> {
     setState(() => _shouldShuffle = value);
     _preparePlayList();
     if ((_status == AutoplayStatus.playing || _status == AutoplayStatus.paused) && _currentPlayList.isNotEmpty) {
-      if (_status == AutoplayStatus.paused) setState(() => _status = AutoplayStatus.playing);
+      if(_status == AutoplayStatus.paused) setState(() => _status = AutoplayStatus.playing);
       _startCardCycle();
     } else if (_currentPlayList.isEmpty) {
       setState(() => _status = AutoplayStatus.finished);
@@ -2262,7 +2410,6 @@ class _AutoplayScreenState extends State<AutoplayScreen> {
   void _showExplanationDialog() {
     if (_currentCard?.explanation == null) return;
     if (_status == AutoplayStatus.playing) _togglePlayPause();
-
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -2303,8 +2450,16 @@ class _AutoplayScreenState extends State<AutoplayScreen> {
             const SizedBox(height: 10),
             if (!_showFront && _currentCard?.explanation != null && _status != AutoplayStatus.finished)
               Padding(padding: const EdgeInsets.only(bottom: 8.0), child: TextButton.icon(icon: const Icon(Iconsax.document_text_1), label: const Text('Why? Show Explanation'), onPressed: _showExplanationDialog)),
-            if (_status == AutoplayStatus.playing && _currentTimerDuration > 0 && card != null)
-              Padding(padding: const EdgeInsets.symmetric(vertical: 8.0), child: Column(children: [LinearProgressIndicator(value: (_currentTimerDuration > 0) ? ((_currentTimerDuration - _timeRemaining) / _currentTimerDuration) : 0, minHeight: 10, backgroundColor: Colors.grey[300], valueColor: AlwaysStoppedAnimation<Color>(_showFront ? theme.primaryColor : Colors.green)), const SizedBox(height: 4), Text("Time remaining: $_timeRemaining s", style: theme.textTheme.labelSmall)])),
+            
+            // --- NEW SMOOTH PROGRESS BAR ---
+            if (_status == AutoplayStatus.playing || _status == AutoplayStatus.paused)
+              LinearProgressIndicator(
+                value: _progressController.value,
+                minHeight: 10,
+                backgroundColor: Colors.grey[300],
+                valueColor: AlwaysStoppedAnimation<Color>(_showFront ? theme.primaryColor : Colors.green),
+              ),
+            
             if (_status == AutoplayStatus.paused && card != null)
               const Padding(padding: EdgeInsets.symmetric(vertical: 8.0), child: Text("Paused", textAlign: TextAlign.center, style: TextStyle(fontStyle: FontStyle.italic))),
             const SizedBox(height: 10),
@@ -2561,22 +2716,19 @@ class _ManualStudyScreenState extends State<ManualStudyScreen> {
 --- START FILE: lib\main.dart ---
 // lib/main.dart
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:ejd_cards/features/deck_list/screens/deck_list_screen.dart';
 import 'package:ejd_cards/core/services/settings_service.dart';
+import 'package:ejd_cards/core/theme/app_theme.dart'; // Import our new theme file
 
-// Global ValueNotifier for the theme mode.
-// This allows any widget in the app to listen to theme changes.
-final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.system);
+// We now need a custom enum for our theme setting
+enum AppThemeMode { system, light, dark, amoled }
+
+final ValueNotifier<AppThemeMode> themeNotifier = ValueNotifier(AppThemeMode.system);
 
 void main() async {
-  // Ensure Flutter bindings are initialized before using async operations like loading settings.
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Load the saved theme mode and update the notifier before the app runs.
   final settingsService = SettingsService();
   themeNotifier.value = await settingsService.getThemeMode();
-
   runApp(const EjdCardsApp());
 }
 
@@ -2585,57 +2737,22 @@ class EjdCardsApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Define our custom TextTheme using Google Fonts
-    final textTheme = Theme.of(context).textTheme;
-    final poppinsTextTheme = GoogleFonts.poppinsTextTheme(textTheme).copyWith(
-          displaySmall: GoogleFonts.poppins(textStyle: textTheme.displaySmall, fontWeight: FontWeight.w600),
-          headlineMedium: GoogleFonts.poppins(textStyle: textTheme.headlineMedium, fontWeight: FontWeight.w600),
-          titleLarge: GoogleFonts.poppins(textStyle: textTheme.titleLarge, fontWeight: FontWeight.bold),
-        );
-
-    // Define our Light Theme
-    final lightTheme = ThemeData(
-      useMaterial3: true,
-      brightness: Brightness.light,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF6A5AE0), // Our primary purple/violet
-        brightness: Brightness.light,
-        primary: const Color(0xFF6A5AE0),
-        surface: const Color(0xFFFFFFFF), // Card backgrounds
-        background: const Color(0xFFF6F6F9), // App background
-        shadow: Colors.black.withOpacity(0.1),
-        surfaceVariant: Colors.grey.shade200,
-      ),
-      textTheme: poppinsTextTheme,
-      scaffoldBackgroundColor: const Color(0xFFF6F6F9),
-    );
-
-    // Define our Dark Theme
-    final darkTheme = ThemeData(
-      useMaterial3: true,
-      brightness: Brightness.dark,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF7B61FF), // A slightly brighter purple for dark mode
-        brightness: Brightness.dark,
-        primary: const Color(0xFF7B61FF),
-        surface: const Color(0xFF2D2D3A), // Card backgrounds
-        background: const Color(0xFF1F1F29), // App background
-        shadow: Colors.black.withOpacity(0.2),
-        surfaceVariant: Colors.white.withOpacity(0.1),
-      ),
-      textTheme: poppinsTextTheme,
-      scaffoldBackgroundColor: const Color(0xFF1F1F29),
-    );
-
-    return ValueListenableBuilder<ThemeMode>(
+    return ValueListenableBuilder<AppThemeMode>(
       valueListenable: themeNotifier,
       builder: (context, currentMode, child) {
+        final brightness = MediaQuery.platformBrightnessOf(context);
+        final useDarkTheme = (currentMode == AppThemeMode.dark) ||
+                             (currentMode == AppThemeMode.amoled) ||
+                             (currentMode == AppThemeMode.system && brightness == Brightness.dark);
+
         return MaterialApp(
           title: 'EJD Cards',
           debugShowCheckedModeBanner: false,
-          theme: lightTheme,
-          darkTheme: darkTheme,
-          themeMode: currentMode,
+          theme: AppTheme.lightTheme,
+          darkTheme: (currentMode == AppThemeMode.amoled || (currentMode == AppThemeMode.system && useDarkTheme))
+              ? AppTheme.amoledTheme
+              : AppTheme.darkTheme,
+          themeMode: useDarkTheme ? ThemeMode.dark : ThemeMode.light,
           home: const DeckListScreen(),
         );
       },

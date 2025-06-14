@@ -49,6 +49,19 @@ class DeckImporterService {
       return ParseResult(error: "Failed to parse JSON file. Error: ${e.toString()}");
     }
   }
+
+  // New method to handle a raw string
+  Future<ParseResult> importDeckFromString(String jsonString) async {
+    try {
+      // Convert the string to bytes and call the existing method
+      final bytes = Uint8List.fromList(utf8.encode(jsonString));
+      return await importDeckFromFile(bytes);
+    } catch (e) {
+      return ParseResult(error: "Invalid text format. Error: ${e.toString()}");
+    }
+  }
+
+  
 }
 
 class ParseResult {
